@@ -213,6 +213,46 @@ acelerar la inicializacion.
 
 ---
 
+## 13. API Gateway integracion directa SQS falla con InternalError
+
+**Sintoma:** `put-integration --type AWS ...` parece funcionar, pero
+`create-deployment` falla con "No integration defined for method".
+`get-integration` lanza `InternalError`:
+```
+AttributeError: 'dict' object has no attribute 'method_integration'
+```
+
+**Causa:** Bug en LocalStack 4.0.3. El patch `apigateway/patches.py` espera que
+`resource_method` sea un objeto, pero moto lo almacena como diccionario. La
+integracion directa a SQS queda corrupta.
+
+**Resolucion:** Usar `AWS_PROXY` con una Lambda intermediaria (`api_handler.py`)
+que recibe el HTTP request y lo reenvia a SQS con boto3. El flujo queda:
+
+```
+Postman -> API Gateway (AWS_PROXY) -> Lambda proxy -> SQS -> Lambda procesadora
+```
+
+**Archivos:** `scripts/api/create_rest_api.ps1`, `src/api_handler.py`
+
+---
+
+## 14. Proxy Lambda no encuentra endpoint SQS
+
+**Sintoma:** La proxy Lambda se ejecuta pero falla al conectar con SQS.
+
+**Causa:** Dentro del contenedor ejecutor, `localhost` es el propio contenedor, no
+LocalStack. Usar `http://localhost:4566` como endpoint falla.
+
+**Resolucion:** Leer `AWS_ENDPOINT_URL` del entorno (LocalStack lo inyecta):
+```python
+endpoint_url = os.environ.get('AWS_ENDPOINT_URL', 'http://localhost:4566')
+```
+
+**Archivo:** `src/api_handler.py`
+
+---
+
 ## Resumen de cambios de configuracion
 
 | Variable | Valor final | Proposito |

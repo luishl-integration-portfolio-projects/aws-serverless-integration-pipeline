@@ -43,23 +43,28 @@ Step-Header -Num 2 -Label "SQS Queue"
 & "$scriptRoot\queues\create_queue.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# Step 3: Package Lambda
-Step-Header -Num 3 -Label "Lambda Package"
+# Step 3: Create API Gateway REST endpoint
+Step-Header -Num 3 -Label "API Gateway"
+& "$scriptRoot\api\create_rest_api.ps1"
+if ($LASTEXITCODE -ne 0) { Write-Host "[WARN] API Gateway may have failed." -ForegroundColor Yellow }
+
+# Step 4: Package Lambda
+Step-Header -Num 4 -Label "Lambda Package"
 & "$scriptRoot\lambda\package_lambda.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# Step 4: Deploy Lambda
-Step-Header -Num 4 -Label "Lambda Deployment"
+# Step 5: Deploy Lambda
+Step-Header -Num 5 -Label "Lambda Deployment"
 & "$scriptRoot\lambda\deploy_lambda.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# Step 5: Create SQS -> Lambda Trigger
-Step-Header -Num 5 -Label "SQS -> Lambda Trigger"
+# Step 6: Create SQS -> Lambda Trigger
+Step-Header -Num 6 -Label "SQS -> Lambda Trigger"
 & "$scriptRoot\lambda\create_trigger.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# Step 6: Send Test Message
-Step-Header -Num 6 -Label "Test Message"
+# Step 7: Send Test Message
+Step-Header -Num 7 -Label "Test Message"
 if (-not $SkipTestMessage) {
     & "$scriptRoot\queues\publish_message_to_queue.ps1"
     if ($LASTEXITCODE -ne 0) { Write-Host "[WARN] Test message may have failed." -ForegroundColor Yellow }
@@ -71,8 +76,8 @@ if (-not $SkipTestMessage) {
 Write-Host "  [..] Waiting 3 seconds for Lambda to process..." -ForegroundColor DarkYellow
 Start-Sleep -Seconds 3
 
-# Step 7: Verify
-Step-Header -Num 7 -Label "Verify"
+# Step 8: Verify
+Step-Header -Num 8 -Label "Verify"
 & "$scriptRoot\lambda\verify_logs.ps1"
 
 Write-Host ""
@@ -81,6 +86,7 @@ Write-Host "[OK] Deployment complete!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor Cyan
+Write-Host "  - Test with Postman:     POST http://127.0.0.1:4566/restapis/<api-id>/dev/_user_request_/orders" -ForegroundColor White
 Write-Host "  - Publish more messages: .\scripts\queues\publish_message_to_queue.ps1" -ForegroundColor White
 Write-Host "  - Check logs again:      .\scripts\lambda\verify_logs.ps1" -ForegroundColor White
 Write-Host "  - Read from queue:       .\scripts\queues\receive_message.ps1" -ForegroundColor White

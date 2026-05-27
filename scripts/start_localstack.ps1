@@ -114,7 +114,7 @@ podman run -d `
     -e LAMBDA_EXECUTOR=docker `
     -e LAMBDA_DOCKER_NETWORK=ls-net `
     -e DEBUG=1 `
-    -e SERVICES=lambda,sqs,logs `
+    -e SERVICES=lambda,sqs,logs,apigateway,iam `
     localstack/localstack:4.0
 
 if ($LASTEXITCODE -ne 0) {

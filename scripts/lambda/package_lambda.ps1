@@ -23,3 +23,4 @@ if (Test-Path $archivePath) {
 Compress-Archive -Path "$tempDir\index.py" -DestinationPath $archivePath -Force
 
 Write-Host "[3/3] Done: $archivePath" -ForegroundColor Green
+exit 0
