@@ -1,0 +1,28 @@
+Vamos a destripar línea por línea el resto de los parámetros para que veas qué significan en el mundo AWS y cómo se traducen a tu experiencia en MuleSoft/TIBCO:
+
+--function-name procesador-pedidos-lambda
+Qué hace: Es simplemente el nombre identificador que va a tener tu servicio dentro de AWS.
+
+Tu equivalente: Es el nombre de tu proyecto o el AppName que le pones a tu Mule Application cuando la subes a CloudHub.
+
+--runtime python3.12
+Qué hace: Le dice a AWS en qué entorno o "lenguaje" está escrito tu código para que la infraestructura prepare el contenedor adecuado (la versión de Python exacta).
+
+Tu equivalente: En MuleSoft, esto sería el equivalente a elegir la versión del Mule Runtime (por ejemplo, seleccionar si tu flujo va a correr en Mule 4.4 o Mule 4.6). AWS soporta interfaces para Node.js, Java, .NET, Python, etc.
+
+--role arn:aws:iam::000000000000:role/lambda-ex (El misterioso)
+Qué hace: En AWS impera la "seguridad cero por defecto". Una Lambda al nacer está completamente aislada; no puede hacer nada fuera de sí misma. Este parámetro le asigna un Rol de Seguridad (IAM Role) que define qué tiene permitido hacer.
+
+Por qué tiene ese formato raro (arn:...): En AWS, cualquier recurso del mundo tiene un DNI único llamado ARN (Amazon Resource Name). El formato significa: arn (es un recurso AWS) : aws (partición) : iam (servicio de seguridad) : 000000000000 (en AWS real aquí va tu número de cuenta de 12 dígitos, pero en LocalStack siempre son doce ceros) : role/lambda-ex (el nombre del rol).
+
+Para qué sirve en este proyecto: Ese rol (que en LocalStack es de mentira y se lo traga sin rechistar) en el AWS real le daría permiso a la Lambda para dos cosas cruciales: poder leer mensajes de la cola SQS y poder escribir logs en la consola.
+
+--handler index.lambda_handler
+Qué hace: Le da la dirección exacta de la "puerta de entrada" a tu código. Le dice a AWS: "Cuando despiertes a la Lambda, busca el archivo que se llama index (nuestro index.py) y ejecuta la función que está dentro llamada lambda_handler".
+
+Tu equivalente: Es el componente Inbound Flow de tu flujo de MuleSoft. El punto exacto por donde entra el mensaje para empezar a procesarse.
+
+--zip-file fileb:///workspace/funcion_lambda.zip
+Qué hace: Le pasa el binario del código comprimido. El prefijo fileb:// (con una 'b' de binario) es obligatorio en la CLI de AWS para indicarle que vas a subir un archivo local mapeado (nuestro ZIP) en lugar de un texto plano.
+
+Tu equivalente: Es el archivo .jar empaquetado que generas en Anypoint Studio cuando haces el build de tu aplicación de MuleSoft para desplegarla en el servidor.
