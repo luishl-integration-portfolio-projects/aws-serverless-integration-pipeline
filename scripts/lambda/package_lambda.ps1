@@ -1,4 +1,4 @@
-$sourcePath  = Join-Path $PSScriptRoot "..\..\src\index.py"
+$sourcePath = Join-Path $PSScriptRoot "..\..\src\index.py"
 $archivePath = Join-Path $PSScriptRoot "..\..\src\funcion_lambda.zip"
 
 if (-not (Test-Path $sourcePath)) {
@@ -6,12 +6,20 @@ if (-not (Test-Path $sourcePath)) {
     exit 1
 }
 
-Write-Host "[1/3] Packaging Lambda code..." -ForegroundColor Cyan
-Compress-Archive -Path $sourcePath -DestinationPath $archivePath -Force
+Write-Host "[1/3] Preparing temp folder..." -ForegroundColor Cyan
 
-if ($LASTEXITCODE -eq 0 -or (Test-Path $archivePath)) {
-    Write-Host "  [OK] Lambda package created: $archivePath" -ForegroundColor Green
-} else {
-    Write-Host "[ERR] Failed to create Lambda package." -ForegroundColor Red
-    exit 1
+$tempDir = Join-Path $env:TEMP "lambda_build"
+Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $tempDir | Out-Null
+
+Copy-Item $sourcePath "$tempDir\index.py"
+
+Write-Host "[2/3] Creating ZIP with correct structure..." -ForegroundColor Cyan
+
+if (Test-Path $archivePath) {
+    Remove-Item $archivePath -Force
 }
+
+Compress-Archive -Path "$tempDir\index.py" -DestinationPath $archivePath -Force
+
+Write-Host "[3/3] Done: $archivePath" -ForegroundColor Green

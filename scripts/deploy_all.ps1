@@ -1,138 +1,87 @@
-<#
-.SYNOPSIS
-    Deploy the full AWS Serverless Integration Pipeline locally.
-.DESCRIPTION
-    Orchestrates the complete pipeline setup:
-      1. Start LocalStack (or verify it's running)
-      2. Create SQS queue
-      3. Package Lambda code
-      4. Deploy Lambda function
-      5. Create SQS → Lambda trigger (event source mapping)
-      6. Send a test message
-      7. Verify logs
-
-    Run this from the project root with:
-      .\scripts\deploy_all.ps1
-.PARAMETER SkipStart
-    Skip LocalStack startup (assume it's already running).
-.PARAMETER SkipTestMessage
-    Skip sending the test message at the end.
-#>
 param(
+    [switch]$SkipCleanup,
     [switch]$SkipStart,
     [switch]$SkipTestMessage
 )
 
 $scriptRoot  = $PSScriptRoot
-$projectRoot = Join-Path $scriptRoot ".."
 
 Write-Host "============================================" -ForegroundColor Magenta
-Write-Host " AWS Serverless Integration Pipeline — Deploy" -ForegroundColor Magenta
+Write-Host " AWS Serverless Integration Pipeline - Deploy" -ForegroundColor Magenta
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host ""
 
 function Step-Header {
     param([int]$Num, [string]$Label)
-    Write-Host "─── Step $Num: $Label ───" -ForegroundColor Cyan
+    Write-Host ("--- Step {0}: {1} ---" -f $Num, $Label) -ForegroundColor Cyan
 }
 
-# ──────────────────────────────────────────────
+# Step 0: Cleanup old Lambda executors
+Step-Header -Num 0 -Label "Cleanup"
+if (-not $SkipCleanup) {
+    & "$scriptRoot\cleanup_containers.ps1"
+} else {
+    Write-Host "  -> Skipping cleanup (--SkipCleanup)." -ForegroundColor Yellow
+}
+
 # Step 1: Start LocalStack
-# ──────────────────────────────────────────────
 Step-Header -Num 1 -Label "LocalStack"
 if (-not $SkipStart) {
     & "$scriptRoot\start_localstack.ps1"
     if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 } else {
-    Write-Host "  → Skipping start (--SkipStart). Verifying connectivity..." -ForegroundColor Yellow
+    Write-Host "  -> Skipping start (--SkipStart). Verifying connectivity..." -ForegroundColor Yellow
     $lsUri = $null; $candidates = @("http://127.0.0.1:4566", "http://localhost:4566", "http://[::1]:4566")
     try { $w = wsl -- ip -4 addr show eth0 2>$null; if ($w) { $m = [regex]::Match($w, 'inet (\d+\.\d+\.\d+\.\d+)'); if ($m.Success) { $candidates += "http://$($m.Groups[1].Value):4566" } } } catch {}
     foreach ($u in $candidates) { try { $null = Invoke-RestMethod -Uri "$u/_localstack/health" -ErrorAction Stop -TimeoutSec 2; $lsUri = $u; break } catch { continue } }
-    if ($lsUri) {
-        Write-Host "  [OK] LocalStack is reachable." -ForegroundColor Green
-    } else {
-        Write-Host "[ERR] LocalStack is not reachable. Start it first or remove --SkipStart." -ForegroundColor Red
-        exit 1
-    }
+    if ($lsUri) { Write-Host "  [OK] LocalStack is reachable." -ForegroundColor Green }
+    else { Write-Host "[ERR] LocalStack is not reachable." -ForegroundColor Red; exit 1 }
 }
 
-# ──────────────────────────────────────────────
 # Step 2: Create SQS Queue
-# ──────────────────────────────────────────────
 Step-Header -Num 2 -Label "SQS Queue"
 & "$scriptRoot\queues\create_queue.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# ──────────────────────────────────────────────
 # Step 3: Package Lambda
-# ──────────────────────────────────────────────
 Step-Header -Num 3 -Label "Lambda Package"
 & "$scriptRoot\lambda\package_lambda.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# ──────────────────────────────────────────────
 # Step 4: Deploy Lambda
-# ──────────────────────────────────────────────
 Step-Header -Num 4 -Label "Lambda Deployment"
 & "$scriptRoot\lambda\deploy_lambda.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# ──────────────────────────────────────────────
-# Step 2: Create SQS Queue
-# ──────────────────────────────────────────────
-Step-Header -Num 2 -Label "SQS Queue"
-& "$scriptRoot\queues\create_queue.ps1"
-if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
-
-# ──────────────────────────────────────────────
-# Step 3: Package Lambda
-# ──────────────────────────────────────────────
-Step-Header -Num 3 -Label "Lambda Package"
-& "$scriptRoot\lambda\package_lambda.ps1"
-if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
-
-# ──────────────────────────────────────────────
-# Step 4: Deploy Lambda
-# ──────────────────────────────────────────────
-Step-Header -Num 4 -Label "Lambda Deployment"
-& "$scriptRoot\lambda\deploy_lambda.ps1"
-if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
-
-# ──────────────────────────────────────────────
-# Step 5: Create SQS → Lambda Trigger
-# ──────────────────────────────────────────────
-Step-Header -Num 5 -Label "SQS → Lambda Trigger"
+# Step 5: Create SQS -> Lambda Trigger
+Step-Header -Num 5 -Label "SQS -> Lambda Trigger"
 & "$scriptRoot\lambda\create_trigger.ps1"
 if ($LASTEXITCODE -ne 0) { Write-Host "[ERR] Aborting." -ForegroundColor Red; exit 1 }
 
-# ──────────────────────────────────────────────
 # Step 6: Send Test Message
-# ──────────────────────────────────────────────
 Step-Header -Num 6 -Label "Test Message"
 if (-not $SkipTestMessage) {
     & "$scriptRoot\queues\publish_message_to_queue.ps1"
     if ($LASTEXITCODE -ne 0) { Write-Host "[WARN] Test message may have failed." -ForegroundColor Yellow }
 } else {
-    Write-Host "  → Skipping test message (--SkipTestMessage)." -ForegroundColor Yellow
+    Write-Host "  -> Skipping test message (--SkipTestMessage)." -ForegroundColor Yellow
 }
 
 # Give Lambda a moment to process
 Write-Host "  [..] Waiting 3 seconds for Lambda to process..." -ForegroundColor DarkYellow
 Start-Sleep -Seconds 3
 
-# ──────────────────────────────────────────────
 # Step 7: Verify
-# ──────────────────────────────────────────────
 Step-Header -Num 7 -Label "Verify"
 & "$scriptRoot\lambda\verify_logs.ps1"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Magenta
-Write-Host " [OK] Deployment complete!" -ForegroundColor Green
+Write-Host "[OK] Deployment complete!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host ""
 Write-Host "  Next steps:" -ForegroundColor Cyan
-Write-Host "  • Publish more messages: .\scripts\queues\publish_message_to_queue.ps1" -ForegroundColor White
-Write-Host "  • Check logs again:      .\scripts\lambda\verify_logs.ps1" -ForegroundColor White
-Write-Host "  • Read from queue:       .\scripts\queues\receive_message.ps1" -ForegroundColor White
-Write-Host "  • Tear down:             .\scripts\teardown.ps1" -ForegroundColor White
+Write-Host "  - Publish more messages: .\scripts\queues\publish_message_to_queue.ps1" -ForegroundColor White
+Write-Host "  - Check logs again:      .\scripts\lambda\verify_logs.ps1" -ForegroundColor White
+Write-Host "  - Read from queue:       .\scripts\queues\receive_message.ps1" -ForegroundColor White
+Write-Host "  - Tear down:             .\scripts\teardown.ps1" -ForegroundColor White
