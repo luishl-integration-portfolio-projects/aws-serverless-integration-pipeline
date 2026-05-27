@@ -1,0 +1,2 @@
+# Script para inicializar la infraestructura local de mensajería
+podman run --rm -it --network=host -e AWS_ACCESS_KEY_ID=mock -e AWS_SECRET_ACCESS_KEY=mock -e AWS_DEFAULT_REGION=us-east-1 amazon/aws-cli --endpoint-url=http://127.0.0.1:4566 sqs create-queue --queue-name cola-pedidos-ecommerce
