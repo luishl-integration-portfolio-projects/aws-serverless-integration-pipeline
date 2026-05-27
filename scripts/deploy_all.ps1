@@ -19,7 +19,7 @@ function Step-Header {
 # Step 0: Cleanup old Lambda executors
 Step-Header -Num 0 -Label "Cleanup"
 if (-not $SkipCleanup) {
-    & "$scriptRoot\cleanup_containers.ps1"
+    & "$scriptRoot\cleanup_containers.ps1" -All
 } else {
     Write-Host "  -> Skipping cleanup (--SkipCleanup)." -ForegroundColor Yellow
 }
