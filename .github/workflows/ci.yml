@@ -27,6 +27,9 @@ jobs:
           AWS_REGION: us-east-1
           AWS_ACCESS_KEY_ID: mock-access-key
           AWS_SECRET_ACCESS_KEY: mock-secret-key
+          # Ejecuta Lambdas en-proceso (no necesita Docker):
+          LAMBDA_EXECUTOR: local
+          LAMBDA_REMOTE_DOCKER: "false"
 
     steps:
       - name: Checkout

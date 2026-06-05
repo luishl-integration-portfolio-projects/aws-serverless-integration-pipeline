@@ -110,7 +110,6 @@ resource "aws_api_gateway_integration" "delete_order" {
 # ── Deploy to stage "dev" ────────────────────────────────────────
 resource "aws_api_gateway_deployment" "dev" {
   rest_api_id = aws_api_gateway_rest_api.ecommerce.id
-  stage_name  = local.api_stage_name
 
   depends_on = [
     aws_api_gateway_integration.lambda_proxy,
@@ -130,4 +129,10 @@ resource "aws_api_gateway_deployment" "dev" {
       delete = aws_api_gateway_integration.delete_order
     }))
   }
+}
+
+resource "aws_api_gateway_stage" "dev" {
+  rest_api_id   = aws_api_gateway_rest_api.ecommerce.id
+  deployment_id = aws_api_gateway_deployment.dev.id
+  stage_name    = local.api_stage_name
 }
