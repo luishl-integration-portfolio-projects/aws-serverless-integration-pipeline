@@ -68,7 +68,9 @@ jobs:
       # ------------------------------------------------------------------
       - name: Terraform Init
         working-directory: ${{ env.TF_DIR }}
-        run: terraform init
+        # -upgrade: ignore locked versions whose GPG signing key has expired;
+        #           fetch the latest provider versions with valid signatures.
+        run: terraform init -upgrade -no-color
 
       - name: Terraform Validate
         working-directory: ${{ env.TF_DIR }}
@@ -211,5 +213,5 @@ jobs:
         if: always()
         working-directory: ${{ env.TF_DIR }}
         run: |
-          terraform init -no-color
+          terraform init -upgrade -no-color
           terraform destroy -auto-approve -no-color
