@@ -22,14 +22,13 @@ jobs:
         image: localstack/localstack:4.0.3
         ports:
           - 4566:4566
+        volumes:
+          - /var/run/docker.sock:/var/run/docker.sock
         env:
           SERVICES: lambda,sqs,dynamodb,apigateway,iam,logs,cloudwatch
           AWS_REGION: us-east-1
           AWS_ACCESS_KEY_ID: mock-access-key
           AWS_SECRET_ACCESS_KEY: mock-secret-key
-          # Ejecuta Lambdas en-proceso (no necesita Docker):
-          LAMBDA_EXECUTOR: local
-          LAMBDA_REMOTE_DOCKER: "false"
 
     steps:
       - name: Checkout
