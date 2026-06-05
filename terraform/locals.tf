@@ -1,6 +1,6 @@
 locals {
-  account_id   = "000000000000"
-  region       = var.region
+  account_id = "000000000000"
+  region     = var.region
 
   # Resource names
   queue_name              = "cola-pedidos-ecommerce"
