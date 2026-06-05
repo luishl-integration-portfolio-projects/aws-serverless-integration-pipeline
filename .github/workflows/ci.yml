@@ -1,0 +1,213 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  TF_VERSION: "1.6.0"
+  TF_DIR: terraform
+  AWS_REGION: us-east-1
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    # LocalStack runs as a service container inside the GitHub runner.
+    # Terraform and curl talk to it at localhost:4566.
+    services:
+      localstack:
+        image: localstack/localstack:4.0.3
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: lambda,sqs,dynamodb,apigateway,iam,logs,cloudwatch
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: mock-access-key
+          AWS_SECRET_ACCESS_KEY: mock-secret-key
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # Terraform setup
+      # ------------------------------------------------------------------
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # ------------------------------------------------------------------
+      # Wait for LocalStack (poll health endpoint)
+      # ------------------------------------------------------------------
+      - name: Wait for LocalStack
+        shell: bash
+        run: |
+          echo "Waiting for LocalStack to be ready..."
+          for i in $(seq 1 30); do
+            health=$(curl -sf http://localhost:4566/_localstack/health 2>/dev/null || echo "")
+            sqs=$(echo "$health" | jq -r '.services.sqs // "unavailable"' 2>/dev/null)
+            if [ "$sqs" = "available" ] || [ "$sqs" = "running" ]; then
+              echo "LocalStack ready (attempt $i)"
+              echo "Services: $(echo "$health" | jq -r '.services | to_entries | map(select(.value != "available") | .key) | join(", ")')"
+              curl -s http://localhost:4566/_localstack/health | jq .
+              exit 0
+            fi
+            echo "  Not ready yet (attempt $i of 30)..."
+            sleep 2
+          done
+          echo "LocalStack failed to become ready"
+          curl -s http://localhost:4566/_localstack/health || true
+          exit 1
+
+      # ------------------------------------------------------------------
+      # Terraform lifecycle
+      # ------------------------------------------------------------------
+      - name: Terraform Init
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform init
+
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform validate
+
+      - name: Terraform Format Check
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform fmt -check -recursive
+
+      - name: Terraform Plan
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform apply -auto-approve -no-color
+
+      # ------------------------------------------------------------------
+      # Extract API endpoint for curl tests
+      # ------------------------------------------------------------------
+      - name: Get API Endpoint
+        id: api
+        working-directory: ${{ env.TF_DIR }}
+        shell: bash
+        run: |
+          ENDPOINT=$(terraform output -raw api_endpoint)
+          echo "API endpoint: $ENDPOINT"
+          echo "endpoint=$ENDPOINT" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------
+      # Integration tests (all via curl — no Postman, no AWS CLI needed)
+      # ------------------------------------------------------------------
+      - name: Test 1 — POST /orders (async ingestion via SQS)
+        shell: bash
+        run: |
+          echo "=== Test 1: POST /orders ==="
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
+            "${{ steps.api.outputs.endpoint }}/orders" \
+            -H "Content-Type: application/json" \
+            -d '{"id_pedido":1001,"cliente":"CI-Test","total":99.90,"productos":["Widget X"],"moneda":"EUR"}')
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          echo "Status: $HTTP_CODE"
+          echo "Body:    $BODY"
+          [ "$HTTP_CODE" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+          echo "$BODY" | jq -e '.messageId' > /dev/null || { echo "FAIL: no messageId"; exit 1; }
+          echo "PASS"
+
+      - name: Test 2 — Invoke processor Lambda (simulate SQS trigger)
+        shell: bash
+        run: |
+          echo "=== Test 2: Manual invoke of processor Lambda ==="
+          # LocalStack may not auto-trigger SQS→Lambda without Docker,
+          # so we invoke it directly with a mock SQS event.
+          curl -s -X POST \
+            http://localhost:4566/2015-03-31/functions/procesador-pedidos-lambda/invocations \
+            -H "Content-Type: application/json" \
+            -d '{"Records":[{"body":"{\"id_pedido\":1001,\"cliente\":\"CI-Test\",\"total\":99.90,\"productos\":[\"Widget X\"],\"moneda\":\"EUR\"}"}]}' | jq .
+          echo "PASS"
+
+      - name: Test 3 — GET /orders (list all, verify persistence)
+        shell: bash
+        run: |
+          echo "=== Test 3: GET /orders ==="
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" "${{ steps.api.outputs.endpoint }}/orders")
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          echo "Status: $HTTP_CODE"
+          echo "$BODY" | jq .
+          [ "$HTTP_CODE" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+          echo "$BODY" | jq -e '.pedidos[] | select(.id_pedido == 1001)' > /dev/null || {
+            echo "FAIL: order 1001 not found in DynamoDB"
+            echo "Items in table: $(echo "$BODY" | jq -r '.pedidos | length')"
+            exit 1
+          }
+          echo "PASS"
+
+      - name: Test 4 — GET /orders/1001 (get by id)
+        shell: bash
+        run: |
+          echo "=== Test 4: GET /orders/1001 ==="
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "${{ steps.api.outputs.endpoint }}/orders/1001")
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          echo "Status: $HTTP_CODE"
+          echo "$BODY" | jq .
+          [ "$HTTP_CODE" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+          echo "$BODY" | jq -e '.id_pedido == 1001' > /dev/null || {
+            echo "FAIL: unexpected response"; exit 1
+          }
+          echo "PASS"
+
+      - name: Test 5 — PUT /orders/1001 (update)
+        shell: bash
+        run: |
+          echo "=== Test 5: PUT /orders/1001 ==="
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+            "${{ steps.api.outputs.endpoint }}/orders/1001" \
+            -H "Content-Type: application/json" \
+            -d '{"estado":"completado","total":150.00}')
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          echo "Status: $HTTP_CODE"
+          echo "$BODY" | jq .
+          [ "$HTTP_CODE" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+          echo "$BODY" | jq -e '.estado == "completado"' > /dev/null || {
+            echo "FAIL: estado not updated"; exit 1
+          }
+          echo "PASS"
+
+      - name: Test 6 — DELETE /orders/1001
+        shell: bash
+        run: |
+          echo "=== Test 6: DELETE /orders/1001 ==="
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE \
+            "${{ steps.api.outputs.endpoint }}/orders/1001")
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          echo "Status: $HTTP_CODE"
+          echo "$BODY" | jq .
+          [ "$HTTP_CODE" = "200" ] || { echo "FAIL: expected 200"; exit 1; }
+          echo "PASS"
+
+      - name: Test 7 — Confirm 404 after DELETE
+        shell: bash
+        run: |
+          echo "=== Test 7: GET /orders/1001 (expect 404) ==="
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" \
+            "${{ steps.api.outputs.endpoint }}/orders/1001")
+          HTTP_CODE=$(echo "$HTTP_RESPONSE" | tail -1)
+          echo "Status: $HTTP_CODE"
+          [ "$HTTP_CODE" = "404" ] || { echo "FAIL: expected 404 after delete"; exit 1; }
+          echo "PASS"
+
+      # ------------------------------------------------------------------
+      # Cleanup — destroy all LocalStack resources
+      # ------------------------------------------------------------------
+      - name: Terraform Destroy
+        if: always()
+        working-directory: ${{ env.TF_DIR }}
+        run: terraform destroy -auto-approve -no-color
