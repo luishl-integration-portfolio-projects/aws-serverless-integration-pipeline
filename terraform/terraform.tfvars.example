@@ -1,0 +1,5 @@
+# AWS region emulated by LocalStack (default: us-east-1)
+# region = "us-east-1"
+
+# LocalStack endpoint URL (default: http://localhost:4566)
+# localstack_endpoint = "http://localhost:4566"

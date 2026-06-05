@@ -492,3 +492,425 @@ Al completar este pipeline has practicado:
 9. **Patrones de middleware** — equivalentes entre AWS serverless y
    MuleSoft/TIBCO: API Gateway vs API Manager, Lambda proxy vs API Proxy,
    SQS vs JMS, Event Source Mapping vs Inbound Endpoint
+
+---
+
+## Terraform Implementation (Infrastructure as Code)
+
+Ademas del pipeline basado en scripts de PowerShell, el proyecto incluye una
+implementacion paralela usando **Terraform** como herramienta de Infrastructure
+as Code (IaC). Esta version reemplaza los comandos imperativos de AWS CLI por
+recursos declarativos en HCL, gestionando automaticamente el orden de creacion,
+dependencias y estado de la infraestructura.
+
+> Los scripts originales en `scripts/` se conservan integros como referencia
+> educativa. La implementacion Terraform es autonoma dentro de `terraform/`.
+
+---
+
+### Directorio `terraform/`
+
+```
+terraform/
+├── versions.tf                 # Versiones de Terraform y providers
+├── provider.tf                 # Provider AWS apuntando a LocalStack
+├── variables.tf                # Variables de entrada
+├── locals.tf                   # Constantes locales (nombres, ARNs, tags)
+├── iam.tf                      # Rol y politica de ejecucion para Lambda
+├── sqs.tf                      # Cola SQS
+├── lambda.tf                   # Funciones Lambda (procesadora + proxy)
+├── triggers.tf                 # Event source mapping SQS -> Lambda + permiso API Gateway
+├── api_gateway.tf              # API Gateway REST + recurso /orders + metodo POST + integracion
+├── outputs.tf                  # Outputs: endpoint URL, ARNs, nombres
+├── terraform.tfvars.example    # Ejemplo de archivo de variables
+│
+├── lib/
+│   └── Get-Terraform.ps1       # Helper: localiza terraform.exe portatil
+│
+├── download_terraform.ps1      # Descarga terraform.exe portatil a tools/
+├── start_localstack.ps1        # Arranca LocalStack en Podman
+├── stop_localstack.ps1         # Detiene el contenedor de LocalStack
+├── apply.ps1                   # Orquestador: init + apply + outputs
+├── destroy.ps1                 # Destruye recursos + opcionalmente para LocalStack
+├── test_message.ps1            # Envia un pedido de prueba a SQS
+└── verify.ps1                  # Verifica logs de la Lambda procesadora
+```
+
+---
+
+### Descripcion de los archivos Terraform (.tf)
+
+#### `versions.tf` — Restricciones de version
+
+Define las versiones minimas de Terraform (>= 1.6) y los providers necesarios:
+`hashicorp/aws` (~> 5.0) y `hashicorp/archive` (~> 2.0). El provider `archive`
+se usa para empaquetar automaticamente el codigo Python de las Lambdas en
+archivos ZIP.
+
+#### `provider.tf` — Conexion con LocalStack
+
+Configura el provider AWS para que apunte a LocalStack en lugar de a AWS real:
+
+```hcl
+provider "aws" {
+  region                      = var.region
+  access_key                  = "mock-access-key"
+  secret_key                  = "mock-secret-key"
+  skip_credentials_validation = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+  s3_use_path_style           = true
+
+  endpoints {
+    apigateway = var.localstack_endpoint
+    cloudwatch = var.localstack_endpoint
+    iam        = var.localstack_endpoint
+    lambda     = var.localstack_endpoint
+    logs       = var.localstack_endpoint
+    sqs        = var.localstack_endpoint
+  }
+}
+```
+
+- `skip_*` flags: necesarios porque LocalStack usa credenciales ficticias
+  (`mock-access-key` / `mock-secret-key`) y no tiene metadata real de AWS
+- `endpoints`: cada servicio AWS se redirige a `http://localhost:4566`
+  (o al endpoint configurado en `var.localstack_endpoint`)
+
+**Diferencia clave con los scripts:** En la version PowerShell, cada comando
+AWS CLI se ejecuta dentro de un contenedor Podman con `--network=host`. En
+Terraform, el provider habla directamente con LocalStack via HTTP desde el
+host, sin necesidad de contenedores intermediarios.
+
+#### `variables.tf` — Parametrizacion
+
+```hcl
+variable "region"                { default = "us-east-1" }
+variable "localstack_endpoint"   { default = "http://localhost:4566" }
+variable "lambda_timeout"        { default = 30 }
+variable "lambda_memory_size"    { default = 128 }
+```
+
+Permite cambiar la region, el endpoint de LocalStack (util si se ejecuta en
+WSL2 con una IP diferente), o los recursos de las Lambdas sin modificar el
+codigo fuente.
+
+#### `locals.tf` — Constantes del proyecto
+
+Centraliza todos los nombres de recursos y valores derivados:
+
+```hcl
+locals {
+  queue_name             = "cola-pedidos-ecommerce"
+  processor_function_name = "procesador-pedidos-lambda"
+  proxy_function_name    = "api-gateway-proxy"
+  runtime                = "python3.12"
+}
+```
+
+En los scripts PowerShell, estos valores estaban repetidos en cada archivo
+(`create_queue.ps1`, `deploy_lambda.ps1`, `create_rest_api.ps1`, etc.).
+Terraform los centraliza en un solo lugar, eliminando duplicacion.
+
+#### `iam.tf` — Seguridad (Roles y politicas)
+
+Crea un rol de ejecucion para Lambda con una politica que permite:
+
+```hcl
+resource "aws_iam_role" "lambda_exec" {
+  name = "lambda-exec-role"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action  = "sts:AssumeRole"
+    }]
+  })
+}
+```
+
+**Permisos concedidos:**
+- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` — escritura
+  en CloudWatch Logs
+- `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` — las
+  Lambdas necesitan estos permisos para consumir mensajes de SQS
+- `sqs:SendMessage` — la Lambda proxy necesita encolar mensajes
+
+En la version PowerShell, el rol se referenciaba con un ARN quemado
+(`arn:aws:iam::000000000000:role/lambda-ex`). En Terraform se crea
+explícitamente, lo que lo hace portable a AWS real.
+
+#### `sqs.tf` — Cola de mensajes
+
+```hcl
+resource "aws_sqs_queue" "orders" {
+  name                       = "cola-pedidos-ecommerce"
+  visibility_timeout_seconds = 30
+  max_message_size           = 262144
+  message_retention_seconds  = 345600  # 4 dias
+}
+```
+
+Convierte 3 lineas de AWS CLI en un recurso declarativo. Terraform gestiona
+la idempotencia: si la cola ya existe, no la duplica.
+
+#### `lambda.tf` — Funciones Lambda
+
+Utiliza el data source `archive_file` para empaquetar automaticamente el codigo
+Python en ZIP:
+
+```hcl
+data "archive_file" "processor" {
+  type        = "zip"
+  source_file = "${path.module}/../src/index.py"
+  output_path = "${path.module}/../src/funcion_lambda.zip"
+}
+
+resource "aws_lambda_function" "processor" {
+  filename         = data.archive_file.processor.output_path
+  function_name    = "procesador-pedidos-lambda"
+  role             = aws_iam_role.lambda_exec.arn
+  handler          = "index.lambda_handler"
+  runtime          = "python3.12"
+  source_code_hash = data.archive_file.processor.output_base64sha256
+}
+```
+
+**Que hace automaticamente:**
+- Comprime `src/index.py` en `funcion_lambda.zip`
+- Sube el ZIP a LocalStack como codigo de la funcion
+- Si el archivo fuente cambia, detecta el cambio por el hash SHA256 y
+  actualiza solo el codigo (sin recrear la funcion)
+- Espera a que la funcion pase a estado `Active`
+
+En los scripts PowerShell, este proceso requeria dos scripts separados:
+`package_lambda.ps1` (empaquetar) y `deploy_lambda.ps1` (desplegar + esperar).
+Terraform lo unifica en un solo recurso.
+
+```hcl
+resource "aws_lambda_function" "proxy" {
+  # Misma estructura, pero usando src/api_handler.py
+  handler = "api_handler.lambda_handler"
+}
+```
+
+**Nota importante:** No se define la variable de entorno `AWS_ENDPOINT_URL`.
+LocalStack 4.x inyecta automaticamente la URL correcta del endpoint en el
+contenedor ejecutor de la Lambda. Si se definiera explicitamente como
+`http://localhost:4566`, la Lambda proxy fallaria porque dentro del contenedor
+ejecutor `localhost` apunta a si mismo, no a LocalStack.
+
+#### `triggers.tf` — Conexiones entre servicios
+
+Dos recursos clave:
+
+```hcl
+# Event source mapping: SQS -> Lambda procesadora
+resource "aws_lambda_event_source_mapping" "sqs_to_processor" {
+  event_source_arn = aws_sqs_queue.orders.arn
+  function_name    = aws_lambda_function.processor.arn
+  enabled          = true
+  batch_size       = 10
+}
+
+# Permiso: API Gateway -> Lambda proxy
+resource "aws_lambda_permission" "api_gateway_invoke_proxy" {
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.proxy.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "arn:aws:execute-api:${var.region}:${local.account_id}:${aws_api_gateway_rest_api.ecommerce.id}/*/*/*"
+}
+```
+
+El **event source mapping** es el equivalente al script `create_trigger.ps1`.
+Sin este recurso, la Lambda procesadora existe pero nunca se invoca al llegar
+mensajes a la cola.
+
+El **Lambda permission** es el equivalente al comando `lambda add-permission`
+en `create_rest_api.ps1`. Sin este permiso, API Gateway no puede invocar la
+Lambda proxy.
+
+#### `api_gateway.tf` — API REST
+
+Define los 5 recursos necesarios para exponer el endpoint HTTP:
+
+```hcl
+resource "aws_api_gateway_rest_api" "ecommerce" { }           # La API en si
+resource "aws_api_gateway_resource" "orders" { }               # El recurso /orders
+resource "aws_api_gateway_method" "post_orders" { }            # Metodo POST
+resource "aws_api_gateway_integration" "lambda_proxy" { }     # Integracion AWS_PROXY
+resource "aws_api_gateway_deployment" "dev" { }                # Despliegue al stage dev
+```
+
+El deployment incluye un `triggers` para forzar un nuevo despliegue cuando la
+integracion cambia:
+
+```hcl
+resource "aws_api_gateway_deployment" "dev" {
+  triggers = {
+    integration_hash = sha1(jsonencode(aws_api_gateway_integration.lambda_proxy))
+  }
+}
+```
+
+Sin este trigger, Terraform no detectaria que un cambio en la integracion
+requiere un nuevo despliegue (un problema conocido de Terraform + API Gateway).
+
+#### `outputs.tf` — Informacion de salida
+
+```hcl
+output "api_endpoint" {
+  value = "http://localhost:4566/restapis/${aws_api_gateway_rest_api.ecommerce.id}/dev/_user_request_/orders"
+}
+output "sqs_queue_url"           { value = aws_sqs_queue.orders.url }
+output "processor_lambda_arn"    { value = aws_lambda_function.processor.arn }
+output "proxy_lambda_arn"        { value = aws_lambda_function.proxy.arn }
+```
+
+Equivalentes a los mensajes de exito que los scripts PowerShell mostraban al
+final de cada paso.
+
+---
+
+### Scripts PowerShell de soporte (en `terraform/`)
+
+Aunque la infraestructura se define en Terraform, algunos scripts PowerShell
+son necesarios para el entorno local:
+
+| Script | Funcion | Equivalente en `scripts/` |
+|--------|---------|---------------------------|
+| `start_localstack.ps1` | Arranca LocalStack en Podman y espera health check | `scripts/start_localstack.ps1` |
+| `stop_localstack.ps1` | Detiene o elimina el contenedor LocalStack | (nuevo, basado en `scripts/teardown.ps1`) |
+| `apply.ps1` | Orquestador: verifica LocalStack, `terraform init`, `terraform apply` | `scripts/deploy_all.ps1` |
+| `destroy.ps1` | `terraform destroy` + opcionalmente para LocalStack | `scripts/teardown.ps1` |
+| `test_message.ps1` | Envia un mensaje JSON de prueba a SQS | `scripts/queues/publish_message_to_queue.ps1` |
+| `verify.ps1` | Inspecciona logs de la Lambda en contenedores ejecutores y CloudWatch | `scripts/lambda/verify_logs.ps1` |
+| `download_terraform.ps1` | Descarga terraform.exe portatil a `tools/` (sin instalacion global) | (nuevo) |
+| `lib/Get-Terraform.ps1` | Helper para localizar terraform.exe: `tools/` -> PATH -> descarga | (nuevo) |
+
+**Diferencia clave:** Los scripts en `scripts/` ejecutan comandos AWS CLI
+directamente. Los scripts en `terraform/` ejecutan `terraform apply` /
+`terraform destroy`, que a su vez llama al provider AWS.
+
+---
+
+### Flujo de ejecucion Terraform
+
+```
+Postman / curl
+     |
+     v
+API Gateway (REST)                   <- Creado por: aws_api_gateway_*
+     |        /orders POST
+     v
+Lambda proxy (api_handler.py)        <- Creado por: aws_lambda_function.proxy
+     |                                    Permiso:  aws_lambda_permission
+     v
+SQS "cola-pedidos-ecommerce"         <- Creado por: aws_sqs_queue.orders
+     |
+     v
+Lambda procesadora                   <- Creado por: aws_lambda_function.processor
+     | (index.lambda_handler)            Trigger:   aws_lambda_event_source_mapping
+     v
+CloudWatch Logs                      <- Logs gestionados por el rol IAM
+```
+
+**Orden de creacion (gestionado automaticamente por Terraform):**
+
+1. `aws_iam_role.lambda_exec` — el rol debe existir antes que las Lambdas
+2. `aws_sqs_queue.orders` — la cola debe existir antes que el trigger
+3. `aws_lambda_function.proxy` + `aws_lambda_function.processor` — las
+   Lambdas necesitan el rol IAM
+4. `aws_lambda_event_source_mapping` — necesita la cola y la Lambda
+5. `aws_api_gateway_*` — necesita la Lambda proxy
+6. `aws_lambda_permission` — necesita la Lambda proxy y la API Gateway
+
+En los scripts PowerShell, este orden se controlaba manualmente en
+`deploy_all.ps1`. Terraform lo resuelve automaticamente analizando las
+referencias entre recursos.
+
+---
+
+### Comparativa: Scripts vs Terraform
+
+| Aspecto | Scripts PowerShell (`scripts/`) | Terraform (`terraform/`) |
+|---------|--------------------------------|--------------------------|
+| **Paradigma** | Imperativo (paso a paso) | Declarativo (estado deseado) |
+| **Idempotencia** | Implementada manualmente con `if exists...` | Automatica (Terraform compara estado) |
+| **Orden de creacion** | Orquestado en `deploy_all.ps1` | Grafo de dependencias automatico |
+| **AWS CLI** | Ejecutado dentro de contenedor Podman | Provider AWS via HTTP directo a LocalStack |
+| **Empaquetado Lambda** | Script separado `package_lambda.ps1` | `archive_file` data source automatico |
+| **Deteccion de cambios** | Manual (no detecta cambios en codigo) | Automatica via `source_code_hash` |
+| **Destruccion** | `teardown.ps1` (scripts ad-hoc) | `terraform destroy` |
+| **Estado** | No gestionado (comandos sueltos) | `terraform.tfstate` (rastrea todo) |
+| **Portabilidad** | Windows + Podman solamente | Cualquier SO + cualquier ejecutor |
+| **Produccion** | No (disenado solo para LocalStack) | Si (mismos recursos funcionan en AWS real) |
+
+---
+
+### Flujo de trabajo completo (Terraform)
+
+```powershell
+# 0. Una sola vez: descargar Terraform portatil
+cd terraform
+.\download_terraform.ps1
+
+# 1. Arrancar LocalStack
+.\start_localstack.ps1 -Force
+
+# 2. Desplegar toda la infraestructura
+.\apply.ps1 -AutoApprove
+
+# 3. Probar con Postman o mediante script
+.\test_message.ps1
+
+# 4. Verificar logs de la Lambda procesadora
+.\verify.ps1
+
+# 5. Destruir todo al terminar
+.\destroy.ps1 -AutoApprove -AlsoStopLocalStack
+```
+
+Sin necesidad de instalar Terraform globalmente: `download_terraform.ps1`
+descarga el binario portatil a `terraform/tools/terraform.exe`, y los scripts
+`apply.ps1` / `destroy.ps1` lo localizan automaticamente mediante
+`lib/Get-Terraform.ps1`.
+
+---
+
+### Mapa de conceptos: Scripts -> Terraform
+
+| Recurso | Script PowerShell | Recurso Terraform |
+|---------|-------------------|-------------------|
+| Cola SQS | `scripts/queues/create_queue.ps1` | `aws_sqs_queue.orders` |
+| Lambda procesadora | `package_lambda.ps1` + `deploy_lambda.ps1` | `aws_lambda_function.processor` + `data.archive_file.processor` |
+| Lambda proxy | (dentro de `create_rest_api.ps1`) | `aws_lambda_function.proxy` + `data.archive_file.proxy` |
+| Trigger SQS -> Lambda | `scripts/lambda/create_trigger.ps1` | `aws_lambda_event_source_mapping.sqs_to_processor` |
+| API Gateway | `scripts/api/create_rest_api.ps1` | `aws_api_gateway_rest_api` + resource + method + integration + deployment |
+| Permiso API Gateway | (dentro de `create_rest_api.ps1`) | `aws_lambda_permission.api_gateway_invoke_proxy` |
+| Rol IAM | Quemado como ARN fijo | `aws_iam_role.lambda_exec` + `aws_iam_role_policy.lambda_exec` |
+| Esperar estado Active | `lambda wait function-active-v2` | Gestionado implicitamente por Terraform |
+| Variables repetidas | En cada script individual | Centralizadas en `locals.tf` y `variables.tf` |
+
+---
+
+### Lo que se aprendio con la implementacion Terraform
+
+1. **Provider AWS con LocalStack** — configuracion de endpoints personalizados,
+   omision de validacion de credenciales, y diferencias entre LocalStack 3.x y 4.x
+2. **`archive_file` data source** — empaquetado automatico de Lambdas sin scripts
+   externos, deteccion de cambios via SHA256
+3. **API Gateway + Terraform** — manejo del trigger de deployment forzado para
+   detectar cambios en la integracion Lambda
+4. **Event Source Mapping** — recurso especifico de Terraform que conecta SQS
+   con Lambda, equivalente al `create-event-source-mapping` de AWS CLI
+5. **Manejo de errores en PowerShell** — diferencia entre `$LASTEXITCODE` y `$?`
+   para comandos externos, especialmente cuando el ejecutable no existe
+6. **Lambda executor networking** — comprension de que `localhost:4566` dentro
+   del contenedor ejecutor de LocalStack no apunta a LocalStack, y que el
+   entorno inyectado por LocalStack (`AWS_ENDPOINT_URL`) gestiona esto
+   automaticamente si no se sobrescribe
+7. **Portabilidad vs educacion** — la version PowerShell es mas educativa
+   (cada comando se ve explícitamente), mientras que Terraform es mas apto
+   para produccion (declarativo, stateful, portable)
