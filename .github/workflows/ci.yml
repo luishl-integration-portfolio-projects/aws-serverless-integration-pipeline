@@ -210,4 +210,6 @@ jobs:
       - name: Terraform Destroy
         if: always()
         working-directory: ${{ env.TF_DIR }}
-        run: terraform destroy -auto-approve -no-color
+        run: |
+          terraform init -no-color
+          terraform destroy -auto-approve -no-color
