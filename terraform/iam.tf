@@ -53,6 +53,18 @@ resource "aws_iam_role_policy" "lambda_exec" {
         ]
         Resource = local.queue_arn
       },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan",
+          "dynamodb:Query",
+        ]
+        Resource = aws_dynamodb_table.orders.arn
+      },
     ]
   })
 }

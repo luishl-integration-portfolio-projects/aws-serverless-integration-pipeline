@@ -1,7 +1,7 @@
 provider "aws" {
   region                      = var.region
-  access_key                  = "mock-access-key"
-  secret_key                  = "mock-secret-key"
+  access_key                  = "AKID"
+  secret_key                  = "SECRET"
   skip_credentials_validation = true
   skip_requesting_account_id  = true
   skip_metadata_api_check     = true
@@ -10,6 +10,7 @@ provider "aws" {
   endpoints {
     apigateway = var.localstack_endpoint
     cloudwatch = var.localstack_endpoint
+    dynamodb   = var.localstack_endpoint
     iam        = var.localstack_endpoint
     lambda     = var.localstack_endpoint
     logs       = var.localstack_endpoint

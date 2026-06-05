@@ -47,13 +47,14 @@ function Wait-LocalStackReady {
         try {
             $health = Invoke-RestMethod -Uri "http://127.0.0.1:4566/_localstack/health" -ErrorAction Stop -TimeoutSec 3
 
-            $sqsReady    = $health.services.sqs    -in @("available", "running")
-            $lambdaReady = $health.services.lambda -in @("available", "running")
+            $sqsReady      = $health.services.sqs      -in @("available", "running")
+            $lambdaReady   = $health.services.lambda   -in @("available", "running")
+            $dynamoDbReady = $health.services.dynamodb -in @("available", "running")
 
-            if ($sqsReady -and $lambdaReady) {
+            if ($sqsReady -and $lambdaReady -and $dynamoDbReady) {
                 $ready = $true
             } else {
-                Write-Host "  [..] SQS=$($health.services.sqs) Lambda=$($health.services.lambda) (attempt $attempt)" -ForegroundColor DarkYellow
+                Write-Host "  [..] SQS=$($health.services.sqs) Lambda=$($health.services.lambda) DynamoDB=$($health.services.dynamodb) (attempt $attempt)" -ForegroundColor DarkYellow
             }
         } catch {
             Write-Host "  [..] Health endpoint unreachable (attempt $attempt)" -ForegroundColor DarkYellow
@@ -122,7 +123,7 @@ podman run -d `
     -e LAMBDA_EXECUTOR=docker `
     -e LAMBDA_DOCKER_NETWORK=$networkName `
     -e DEBUG=1 `
-    -e SERVICES=lambda,sqs,logs,apigateway,iam `
+    -e SERVICES=lambda,sqs,logs,apigateway,iam,dynamodb `
     $imageTag 2>&1 | Out-Null
 
 if ($LASTEXITCODE -ne 0) { Write-Err "Failed to start LocalStack container." }

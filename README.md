@@ -914,3 +914,248 @@ descarga el binario portatil a `terraform/tools/terraform.exe`, y los scripts
 7. **Portabilidad vs educacion** — la version PowerShell es mas educativa
    (cada comando se ve explícitamente), mientras que Terraform es mas apto
    para produccion (declarativo, stateful, portable)
+
+---
+
+## DynamoDB Persistence & CRUD API
+
+El pipeline original solo encolaba pedidos y los registraba en logs. Se
+anadio una **capa de persistencia** usando DynamoDB y una **API CRUD**
+completa para consultar, actualizar y eliminar los pedidos almacenados.
+
+---
+
+### Arquitectura final
+
+```
+Flujo de ingreso (async):
+POST /orders  →  API Gateway  →  Lambda proxy  →  SQS  →  Lambda procesadora
+                                                                ↓
+                                                           DynamoDB (PutItem)
+
+Flujo CRUD (sync):
+GET  /orders          ─┐
+GET  /orders/{id}      ├→  API Gateway  →  Lambda CRUD  →  DynamoDB
+PUT  /orders/{id}     ─┘
+DELETE /orders/{id}   ─┘
+```
+
+**Dos flujos claramente separados:**
+- **Escritura asincrona:** via SQS, igual que antes, pero ahora la Lambda
+  procesadora persiste en DynamoDB
+- **Lectura/actualizacion/borrado sincrono:** directamente contra DynamoDB
+  via una nueva Lambda CRUD, sin pasar por SQS
+
+---
+
+### Archivos nuevos y modificados
+
+| Archivo | Estado | Proposito |
+|---------|--------|-----------|
+| `src/index.py` | Modificado | Ahora escribe en DynamoDB en vez de solo hacer `print()` |
+| `src/orders_crud.py` | Nuevo | Lambda que maneja GET/PUT/DELETE contra DynamoDB |
+| `terraform/dynamodb.tf` | Nuevo | Tabla DynamoDB `pedidos-ecommerce` con clave primaria `id_pedido` (Number) |
+| `terraform/lambda.tf` | Modificado | Anadida la Lambda CRUD + variable de entorno `DYNAMODB_TABLE` en ambas Lambdas |
+| `terraform/iam.tf` | Modificado | Permisos DynamoDB (PutItem, GetItem, UpdateItem, DeleteItem, Scan) |
+| `terraform/api_gateway.tf` | Modificado | Endpoints GET/PUT/DELETE en `/orders` y `/orders/{id}` |
+| `terraform/triggers.tf` | Modificado | Permiso `lambda:InvokeFunction` para la Lambda CRUD |
+| `terraform/outputs.tf` | Modificado | Nuevo output: `dynamodb_table_name`, `crud_lambda_arn` |
+
+---
+
+### Tabla DynamoDB
+
+```hcl
+resource "aws_dynamodb_table" "orders" {
+  name         = "pedidos-ecommerce"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id_pedido"
+
+  attribute {
+    name = "id_pedido"
+    type = "N"                # Number — coincide con el JSON de entrada
+  }
+}
+```
+
+**Item almacenado (ejemplo):**
+
+```json
+{
+  "id_pedido":      1001,
+  "cliente":        "lherna06",
+  "total":          89.95,
+  "productos":      ["Widget A", "Gadget B"],
+  "moneda":         "EUR",
+  "estado":         "procesado",
+  "creado_en":      "2026-06-05T10:52:26.176519+00:00",
+  "actualizado_en": "2026-06-05T10:52:26.176519+00:00"
+}
+```
+
+**Detalles de implementacion:**
+- `billing_mode = "PAY_PER_REQUEST"` — sin necesidad de provisionar capacidad
+- `estado` permite trackear el ciclo de vida del pedido (procesado, completado, etc.)
+- `creado_en` / `actualizado_en` — timestamps ISO 8601 para auditoria
+- `id_pedido` es Number porque el payload de entrada usa valores numericos
+
+---
+
+### Lambda procesadora (`src/index.py`)
+
+La Lambda que consume mensajes de SQS ahora escribe en DynamoDB:
+
+```python
+from decimal import Decimal
+import json
+
+pedido = json.loads(body_str, parse_float=Decimal)  # Float → Decimal
+
+item = {
+    'id_pedido':      pedido.get('id_pedido'),
+    'cliente':        pedido.get('cliente', 'Anonimo'),
+    'total':          pedido.get('total', Decimal(0)),
+    'productos':      pedido.get('productos', []),
+    'moneda':         pedido.get('moneda', 'EUR'),
+    'estado':         'procesado',
+    'creado_en':      datetime.now(timezone.utc).isoformat(),
+    'actualizado_en': datetime.now(timezone.utc).isoformat(),
+}
+
+table.put_item(Item=item)
+```
+
+**Punto clave — `parse_float=Decimal`:** boto3 no acepta `float` de Python
+para escribir en DynamoDB. Requiere `Decimal`. Al usar `json.loads()` con
+`parse_float=Decimal`, todos los numeros con decimales del JSON se convierten
+automaticamente al tipo correcto.
+
+---
+
+### Lambda CRUD (`src/orders_crud.py`)
+
+Una sola Lambda que recibe todas las peticiones y las rutea internamente:
+
+```python
+def lambda_handler(event, context):
+    method   = event['httpMethod']
+    resource = event['resource']
+
+    if method == 'GET' and resource == '/orders':
+        return list_orders(event)           # Scan DynamoDB
+    elif method == 'GET' and resource == '/orders/{id}':
+        return get_order(event)             # GetItem
+    elif method == 'PUT' and resource == '/orders/{id}':
+        return update_order(event)          # UpdateItem con ExpressionAttributeNames
+    elif method == 'DELETE' and resource == '/orders/{id}':
+        return delete_order(event)          # DeleteItem
+    else:
+        return respond(400, {'error': 'Ruta no soportada'})
+```
+
+**Detalles de implementacion:**
+- **`DecimalEncoder`** — serializador JSON personalizado que convierte `Decimal`
+  a `float` para las respuestas (`json.dumps(cls=DecimalEncoder)`)
+- **`ExpressionAttributeNames`** — la Lambda CRUD usa nombres de atributo con
+  prefijo `#` (ej. `#total`, `#estado`) para evitar conflictos con palabras
+  reservadas de DynamoDB (como `total` o `status`)
+- **Campos actualizables:** `cliente`, `total`, `productos`, `moneda`, `estado`
+  — cualquier combinacion enviada en el body del PUT
+
+---
+
+### Endpoints de la API completa
+
+| Metodo | Ruta | Comportamiento | Integracion |
+|--------|------|----------------|-------------|
+| `POST` | `/orders` | Enc cola el pedido en SQS (respuesta inmediata 202) | Lambda proxy (`api_handler.py`) |
+| `GET` | `/orders` | Lista todos los pedidos (Scan DynamoDB) | Lambda CRUD (`orders_crud.py`) |
+| `GET` | `/orders/{id}` | Devuelve un pedido por `id_pedido` | Lambda CRUD |
+| `PUT` | `/orders/{id}` | Actualiza campos del pedido | Lambda CRUD |
+| `DELETE` | `/orders/{id}` | Elimina el pedido | Lambda CRUD |
+
+**Flujo de cada operacion:**
+
+```
+POST  2001  →  API Gateway  →  Lambda proxy  →  SQS  →  Lambda proc.  →  DynamoDB (write)
+GET   /orders              →  API Gateway  →  Lambda CRUD  →  DynamoDB (Scan)
+GET   /orders/2001         →  API Gateway  →  Lambda CRUD  →  DynamoDB (GetItem)
+PUT   /orders/2001  {body}  →  API Gateway  →  Lambda CRUD  →  DynamoDB (UpdateItem)
+DELETE /orders/2001        →  API Gateway  →  Lambda CRUD  →  DynamoDB (DeleteItem)
+```
+
+---
+
+### Pruebas con Postman
+
+Despues de ejecutar `.\terraform\apply.ps1 -AutoApprove`, la consola muestra
+todos los endpoints disponibles. Ejemplo de salida:
+
+```
+Postman / curl endpoints:
+---------------------------------------------------------
+CREATE (async - via SQS)
+  POST   http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders
+  Body:  {"id_pedido":1, "cliente":"Juan", "total":99.90}
+
+LIST
+  GET    http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders
+
+READ
+  GET    http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1
+
+UPDATE
+  PUT    http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1
+  Body:  {"cliente":"Juan Updated", "total":150.00, "estado":"completado"}
+
+DELETE
+  DELETE http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1
+---------------------------------------------------------
+```
+
+**Secuencia de prueba completa:**
+
+```powershell
+# 1. Enviar pedido (async)
+curl.exe -X POST http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders ^
+  -H "Content-Type: application/json" ^
+  -d "{\"id_pedido\":1001,\"cliente\":\"Test\",\"total\":99.90}"
+
+# 2. Esperar a que la Lambda procesadora lo persista (5-10 segundos)
+
+# 3. Listar todos los pedidos
+curl.exe http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders
+
+# 4. Leer un pedido especifico
+curl.exe http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1001
+
+# 5. Actualizar el pedido
+curl.exe -X PUT http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1001 ^
+  -H "Content-Type: application/json" ^
+  -d "{\"estado\":\"completado\",\"total\":150.00}"
+
+# 6. Eliminar el pedido
+curl.exe -X DELETE http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1001
+```
+
+---
+
+### Conceptos aprendidos con la implementacion CRUD
+
+1. **DynamoDB + boto3** — escritura con `put_item`, lectura con `get_item`,
+   actualizacion con `update_item`, eliminacion con `delete_item`, listado con `scan`
+2. **Decimal vs Float** — DynamoDB no acepta `float` de Python. Uso de
+   `parse_float=Decimal` en `json.loads()` y `DecimalEncoder` personalizado
+   para serializar respuestas JSON
+3. **ExpressionAttributeNames** — palabras reservadas de DynamoDB (como `total`)
+   deben referenciarse con `#nombre` en las UpdateExpression, con su mapping
+   en `ExpressionAttributeNames`
+4. **Single Lambda routing** — una sola Lambda puede manejar multiples
+   operaciones (GET/PUT/DELETE) si se rutea internamente por `httpMethod` y
+   `resource`
+5. **API Gateway + {id}** — los parametros de ruta como `/orders/{id}` llegan
+   a la Lambda via `event['pathParameters']['id']`
+6. **API Gateway deployment triggers** — al anadir nuevos endpoints, Terraform
+   necesita un trigger hash que detecte cambios y fuerce un nuevo deployment
+7. **IAM permissions granulares** — la politica de la Lambda CRUD necesita
+   permisos especificos para cada operacion DynamoDB

@@ -3,17 +3,20 @@ locals {
   region       = var.region
 
   # Resource names
-  queue_name             = "cola-pedidos-ecommerce"
+  queue_name              = "cola-pedidos-ecommerce"
   processor_function_name = "procesador-pedidos-lambda"
-  proxy_function_name    = "api-gateway-proxy"
-  api_name               = "ecommerce-orders-api"
-  api_stage_name         = "dev"
+  proxy_function_name     = "api-gateway-proxy"
+  crud_function_name      = "orders-crud-lambda"
+  api_name                = "ecommerce-orders-api"
+  api_stage_name          = "dev"
+  dynamodb_table_name     = "pedidos-ecommerce"
 
   # Lambda settings
-  runtime          = "python3.12"
+  runtime           = "python3.12"
   processor_handler = "index.lambda_handler"
-  proxy_handler    = "api_handler.lambda_handler"
-  lambda_role_name = "lambda-exec-role"
+  proxy_handler     = "api_handler.lambda_handler"
+  crud_handler      = "orders_crud.lambda_handler"
+  lambda_role_name  = "lambda-exec-role"
 
   # Derived ARNs
   queue_arn = "arn:aws:sqs:${var.region}:${local.account_id}:${local.queue_name}"

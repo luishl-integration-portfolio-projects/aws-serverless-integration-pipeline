@@ -98,19 +98,45 @@ Write-Host "  [OK] Infrastructure deployed." -ForegroundColor Green
 
 Write-Host "[4/4] Deployment summary:" -ForegroundColor Cyan
 $outputs = & (Get-Terraform) output
-if (-not $?) {
-    Write-Host "  (terraform output unavailable)" -ForegroundColor DarkYellow
-} else {
+if ($?) {
     Write-Host $outputs -ForegroundColor White
 }
 
 Pop-Location
 
+# Extract base endpoint for the Postman summary
+$baseEndpoint = "http://localhost:4566"
+$apiId = ""
+$jsonOutput = $outputs | Out-String
+$match = [regex]::Match($jsonOutput, 'api_endpoint\s*=\s*"([^"]+)"')
+if ($match.Success) {
+    $baseEndpoint = $match.Groups[1].Value
+}
+
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Magenta
-Write-Host "[OK] EDA Pipeline deployed via Terraform!" -ForegroundColor Green
+Write-Host "[OK] Pipeline desplegado via Terraform!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Magenta
 Write-Host ""
-Write-Host "  Send test message: .\test_message.ps1" -ForegroundColor White
-Write-Host "  Check Lambda logs: .\verify.ps1" -ForegroundColor White
-Write-Host "  API endpoint URL is shown above (from terraform output)." -ForegroundColor White
+Write-Host '  Postman / curl endpoints:' -ForegroundColor Cyan
+Write-Host '  ---------------------------------------------------------' -ForegroundColor DarkGray
+Write-Host '  CREATE (async - via SQS)' -ForegroundColor White
+Write-Host "    POST   $baseEndpoint/orders" -ForegroundColor Green
+Write-Host '    Body:  {"id_pedido":1, "cliente":"Juan", "total":99.90}' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host '  LIST' -ForegroundColor White
+Write-Host "    GET    $baseEndpoint/orders" -ForegroundColor Green
+Write-Host ''
+Write-Host '  READ' -ForegroundColor White
+Write-Host "    GET    $baseEndpoint/orders/1" -ForegroundColor Green
+Write-Host ''
+Write-Host '  UPDATE' -ForegroundColor White
+Write-Host "    PUT    $baseEndpoint/orders/1" -ForegroundColor Green
+Write-Host '    Body:  {"cliente":"Juan Updated", "total":150.00, "estado":"completado"}' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host '  DELETE' -ForegroundColor White
+Write-Host "    DELETE $baseEndpoint/orders/1" -ForegroundColor Green
+Write-Host '  ---------------------------------------------------------' -ForegroundColor DarkGray
+Write-Host ''
+Write-Host '  Quick test:        .\test_message.ps1' -ForegroundColor White
+Write-Host '  Check logs:        .\verify.ps1' -ForegroundColor White
