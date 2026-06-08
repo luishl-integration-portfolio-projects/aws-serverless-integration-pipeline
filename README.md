@@ -1,145 +1,145 @@
 # AWS Serverless Integration Pipeline (EDA)
 
-Pipeline de integracion empresarial basado en **Arquitectura Orientada a Eventos (EDA)**
-para un e-commerce, ejecutado 100% local con **Podman** y **LocalStack**. Replica patrones
-clasicos de middleware (MuleSoft, TIBCO Business Works) usando servicios nativos de AWS.
+Enterprise integration pipeline based on **Event-Driven Architecture (EDA)**
+for an e-commerce platform, running 100% locally with **Podman** and **LocalStack**. It replicates classic
+middleware patterns (MuleSoft, TIBCO Business Works) using native AWS services.
 
 ---
 
-## Arquitectura
+## Architecture
 
 ```
 Postman / curl
      |
      v
-API Gateway (REST)                 <- Fase de ingesta HTTP
+API Gateway (REST)                 <- HTTP ingestion phase
      |        /orders POST
      v
-Lambda proxy (api_handler.py)      <- Reenvia a SQS
+Lambda proxy (api_handler.py)      <- Forwards to SQS
      |
      v
-SQS                                <- Fase 1: Desacoplamiento (cola)
+SQS                                <- Phase 1: Decoupling (queue)
      |        cola-pedidos-ecommerce
      v
-Lambda procesadora                 <- Fase 2: Procesamiento (disparado por SQS)
+Processor Lambda                   <- Phase 2: Processing (triggered by SQS)
      |        (index.lambda_handler)
      v
-CloudWatch Logs                    <- Logs de ejecucion
+CloudWatch Logs                    <- Execution logs
 ```
 
-### Flujo de datos
+### Data flow
 
-1. Un pedido llega como HTTP POST a API Gateway `/orders`
-2. API Gateway invoca la Lambda proxy mediante integracion `AWS_PROXY`
-3. La Lambda proxy encola el pedido en SQS usando boto3
-4. SQS retiene el mensaje hasta que un consumidor lo procese
-5. La Lambda procesadora se activa **automaticamente** (event source mapping SQS)
-6. Lambda extrae los campos del pedido, los transforma y los registra en CloudWatch
-7. SQS elimina el mensaje tras una ejecucion exitosa
+1. An order arrives as an HTTP POST to API Gateway `/orders`
+2. API Gateway invokes the proxy Lambda via `AWS_PROXY` integration
+3. The proxy Lambda enqueues the order in SQS using boto3
+4. SQS retains the message until a consumer processes it
+5. The processor Lambda is triggered **automatically** (SQS event source mapping)
+6. Lambda extracts the order fields, transforms them, and records them in CloudWatch
+7. SQS deletes the message after a successful execution
 
-### Nota sobre LocalStack 4.x
+### Note about LocalStack 4.x
 
-LocalStack 4.x con Docker habilitado lanza **un contenedor Podman por invocacion de
-Lambda** (ej. `localstack-pipeline-lambda-procesador-pedidos-lambda-<hash>`). Los logs
-de cada ejecucion van a esos contenedores y a CloudWatch Logs, no al contenedor
-principal de LocalStack. Los scripts `verify_logs.ps1` y `dump_logs.ps1` los
-inspeccionan automaticamente.
+LocalStack 4.x with Docker enabled launches **one Podman container per Lambda
+invocation** (e.g. `localstack-pipeline-lambda-procesador-pedidos-lambda-<hash>`). The logs
+from each execution go to those containers and to CloudWatch Logs, not to the main
+LocalStack container. The `verify_logs.ps1` and `dump_logs.ps1` scripts
+inspect them automatically.
 
 ---
 
-## Lo que se ha automatizado (este proyecto)
+## What has been automated (this project)
 
-| Antes (manual) | Ahora (automatizado) |
+| Before (manual) | Now (automated) |
 |----------------|----------------------|
-| Arrancar LocalStack en una terminal separada | `start_localstack.ps1` — arranca en background + espera a que este listo |
-| Crear cola SQS, empaquetar Lambda, desplegar: 3 comandos sueltos | `package_lambda.ps1` + `deploy_lambda.ps1` — creacion o actualizacion idempotente |
-| **El trigger SQS-Lambda no existia** — la Lambda nunca se disparaba sola | `create_trigger.ps1` — conecta SQS -> Lambda con `create-event-source-mapping` |
-| La Lambda se desplegaba pero quedaba en estado `Pending` y fallaba al invocarse | `deploy_lambda.ps1` ahora espera a que la funcion este `Active` |
-| No habia forma de ver los logs de la Lambda | `verify_logs.ps1` — inspecciona contenedores ejecutores + CloudWatch |
-| Enviar JSON con espacios al body de SQS rompia el quoting de PowerShell | `publish_message_to_queue.ps1` usa archivo temporal para el body |
-| El pipeline completo requeria 5+ comandos en orden exacto | `deploy_all.ps1` — despliegue completo en un solo comando |
-| Los contenedores ejecutores se acumulaban entre pruebas | `cleanup_containers.ps1` — los elimina sin reiniciar LocalStack |
-| No habia forma de obtener un dump completo de logs | `dump_logs.ps1` — vuelca todo a un archivo con timestamp |
-| No existia un punto de entrada HTTP para pruebas con Postman | `create_rest_api.ps1` — crea API Gateway REST con Lambda proxy |
-| Limpieza manual de contenedores | `teardown.ps1` — borra recursos y para LocalStack |
+| Starting LocalStack in a separate terminal | `start_localstack.ps1` — starts in background + waits until ready |
+| Creating SQS queue, packaging Lambda, deploying: 3 separate commands | `package_lambda.ps1` + `deploy_lambda.ps1` — idempotent create or update |
+| **The SQS-Lambda trigger did not exist** — Lambda never fired on its own | `create_trigger.ps1` — connects SQS -> Lambda with `create-event-source-mapping` |
+| Lambda was deployed but remained in `Pending` state and failed on invocation | `deploy_lambda.ps1` now waits for the function to become `Active` |
+| No way to view Lambda logs | `verify_logs.ps1` — inspects executor containers + CloudWatch |
+| Sending JSON with spaces in the SQS body broke PowerShell quoting | `publish_message_to_queue.ps1` uses a temporary file for the body |
+| The full pipeline required 5+ commands in exact order | `deploy_all.ps1` — complete deployment in a single command |
+| Executor containers accumulated between tests | `cleanup_containers.ps1` — removes them without restarting LocalStack |
+| No way to get a full log dump | `dump_logs.ps1` — dumps everything to a timestamped file |
+| No HTTP entry point for Postman testing | `create_rest_api.ps1` — creates API Gateway REST with Lambda proxy |
+| Manual container cleanup | `teardown.ps1` — deletes resources and stops LocalStack |
 
 ---
 
-## Prerrequisitos
+## Prerequisites
 
-- **Windows** con PowerShell 5.1+
-- **Podman** instalado (`podman --version`)
-- WSL2 con kernel de Linux actualizado (Podman corre sobre WSL)
-- Puertos **4566** y **4510-4559** libres
+- **Windows** with PowerShell 5.1+
+- **Podman** installed (`podman --version`)
+- WSL2 with updated Linux kernel (Podman runs on WSL)
+- Ports **4566** and **4510-4559** available
 
 ---
 
-## Mapa de scripts
+## Scripts map
 
 ```
 scripts/
-├── start_localstack.ps1           # Arranca LocalStack en background + health check
-├── deploy_all.ps1                 # ORQUESTADOR: ejecuta todo el pipeline secuencialmente
-├── teardown.ps1                   # Limpia todos los recursos y para LocalStack
-├── cleanup_containers.ps1         # Elimina solo contenedores ejecutores Lambda
-├── dump_logs.ps1                  # Vuelca todos los logs a logs/<timestamp>.log
+├── start_localstack.ps1           # Starts LocalStack in background + health check
+├── deploy_all.ps1                 # ORCHESTRATOR: executes the entire pipeline sequentially
+├── teardown.ps1                   # Cleans up all resources and stops LocalStack
+├── cleanup_containers.ps1         # Removes only Lambda executor containers
+├── dump_logs.ps1                  # Dumps all logs to logs/<timestamp>.log
 │
 ├── queues/
-│   ├── create_queue.ps1           # Crea cola SQS (idempotente)
-│   ├── publish_message_to_queue.ps1  # Envia un pedido de prueba a la cola
-│   └── receive_message.ps1        # Lee mensajes de la cola (debug)
+│   ├── create_queue.ps1           # Creates SQS queue (idempotent)
+│   ├── publish_message_to_queue.ps1  # Sends a test order to the queue
+│   └── receive_message.ps1        # Reads messages from the queue (debug)
 │
 ├── lambda/
-│   ├── package_lambda.ps1         # Comprime index.py -> funcion_lambda.zip
-│   ├── deploy_lambda.ps1          # Crea o actualiza la funcion Lambda + espera a Active
-│   ├── create_trigger.ps1         # Conecta SQS -> Lambda (event source mapping)
-│   └── verify_logs.ps1            # Muestra logs de ejecucion (contenedor + ejecutores)
+│   ├── package_lambda.ps1         # Compresses index.py -> funcion_lambda.zip
+│   ├── deploy_lambda.ps1          # Creates or updates Lambda function + waits for Active
+│   ├── create_trigger.ps1         # Connects SQS -> Lambda (event source mapping)
+│   └── verify_logs.ps1            # Shows execution logs (container + executors)
 │
 └── api/
-    └── create_rest_api.ps1        # Crea API Gateway REST + Lambda proxy -> SQS
+    └── create_rest_api.ps1        # Creates API Gateway REST + Lambda proxy -> SQS
 ```
 
 ---
 
-## Ejecucion paso a paso
+## Step-by-step execution
 
-### 1. Despliegue completo (un solo comando)
+### 1. Full deployment (single command)
 
 ```powershell
 .\scripts\deploy_all.ps1
 ```
 
-Pasos ejecutados:
-0. Limpiar contenedores ejecutores de tandas anteriores
-1. Arrancar LocalStack (con `ls-net`, Docker socket, servicios lambda+sqs+logs+apigateway+iam)
-2. Crear cola SQS `cola-pedidos-ecommerce`
-3. Crear API Gateway REST + Lambda proxy para ingesta HTTP
-4. Empaquetar Lambda procesadora (`index.py`)
-5. Desplegar Lambda procesadora
-6. Crear event source mapping SQS -> Lambda
-7. Enviar mensaje de prueba a SQS
-8. Verificar logs de ejecucion
+Steps executed:
+0. Clean up executor containers from previous runs
+1. Start LocalStack (with `ls-net`, Docker socket, lambda+sqs+logs+apigateway+iam services)
+2. Create SQS queue `cola-pedidos-ecommerce`
+3. Create API Gateway REST + Lambda proxy for HTTP ingestion
+4. Package processor Lambda (`index.py`)
+5. Deploy processor Lambda
+6. Create SQS -> Lambda event source mapping
+7. Send test message to SQS
+8. Verify execution logs
 
-### 2. Ejecucion paso a paso (modo aprendizaje)
+### 2. Step-by-step execution (learning mode)
 
-#### Paso 1: Arrancar LocalStack
+#### Step 1: Start LocalStack
 
 ```powershell
 .\scripts\start_localstack.ps1
 ```
 
-**Que hace:**
-- Lanza LocalStack 4.0.3 en un contenedor Podman en modo detached (`-d`)
-- Crea una red Podman personalizada `ls-net` para que los ejecutores Lambda puedan
-  comunicarse con LocalStack
-- Monta el socket Docker (`/var/run/docker.sock`) para que LocalStack pueda ejecutar
-  Lambdas en contenedores aislados
-- Expone puertos con `-p` (mapeo bridge)
-- Detecta automaticamente la IP de WSL2 y prueba multiples direcciones
-  (`127.0.0.1`, `[::1]`, WSL2 IP) para el health check
-- Si ya hay un contenedor corriendo, pregunta si quieres reemplazarlo
+**What it does:**
+- Launches LocalStack 4.0.3 in a Podman container in detached mode (`-d`)
+- Creates a custom Podman network `ls-net` so Lambda executors can
+  communicate with LocalStack
+- Mounts the Docker socket (`/var/run/docker.sock`) so LocalStack can run
+  Lambdas in isolated containers
+- Exposes ports with `-p` (bridge mapping)
+- Automatically detects the WSL2 IP and tests multiple addresses
+  (`127.0.0.1`, `[::1]`, WSL2 IP) for the health check
+- If a container is already running, prompts whether to replace it
 
-**Output esperado:**
+**Expected output:**
 ```
 [1/5] Creating Podman network 'ls-net'...
   -> Network ready.
@@ -152,62 +152,62 @@ Pasos ejecutados:
 [3/5] LocalStack is ready
 ```
 
-**Que aprendes:** Los servicios cloud no estan disponibles instantaneamente.
-En AWS real, aprovisionar una cola SQS o una Lambda lleva segundos. LocalStack
-simula este tiempo de arranque. El patron de *health check* con reintentos es el
-mismo que usan los orquestadores en produccion (Kubernetes readiness probes,
+**What you learn:** Cloud services are not available instantly.
+In real AWS, provisioning an SQS queue or a Lambda takes seconds. LocalStack
+simulates this startup time. The *health check* pattern with retries is the
+same one used by production orchestrators (Kubernetes readiness probes,
 AWS ECS health checks).
 
-El uso de una red personalizada (`ls-net`) resuelve el problema de comunicacion
-entre LocalStack y sus ejecutores Lambda en Podman, que no soporta las IPs
-link-local (`169.254.1.2`) que Docker anade al bridge.
+The use of a custom network (`ls-net`) solves the communication problem
+between LocalStack and its Lambda executors in Podman, which does not support the
+link-local IPs (`169.254.1.2`) that Docker adds to the bridge.
 
 ---
 
-#### Paso 2: Crear la cola SQS
+#### Step 2: Create the SQS queue
 
 ```powershell
 .\scripts\queues\create_queue.ps1
 ```
 
-**Que hace:**
-- Ejecuta `sqs create-queue` contra LocalStack usando la imagen `amazon/aws-cli`
-  dentro de Podman
-- `--network=host` es **critico**: permite que el contenedor AWS CLI vea LocalStack
-  en `127.0.0.1:4566` (sin esto, el contenedor usaria su propia red aislada)
+**What it does:**
+- Runs `sqs create-queue` against LocalStack using the `amazon/aws-cli` image
+  inside Podman
+- `--network=host` is **critical**: it allows the AWS CLI container to see LocalStack
+  at `127.0.0.1:4566` (without this, the container would use its own isolated network)
 
-**Output esperado:**
+**Expected output:**
 ```
 [1/2] Creating SQS queue 'cola-pedidos-ecommerce'...
   [OK] Queue created: http://127.0.0.1:4566/000000000000/cola-pedidos-ecommerce
 ```
 
-**Que aprendes:**
-- **SQS (Simple Queue Service)** es un buffer de mensajeria desacoplada. En
-  middleware tradicional, esto equivale a un *JMS Queue* (TIBCO EMS, IBM MQ,
-  ActiveMQ). En MuleSoft, seria el equivalente a usar el conector Anypoint MQ o JMS.
-- El `QueueUrl` contiene `000000000000` — es la cuenta de AWS (12 digitos). En
-  LocalStack siempre son ceros; en AWS real seria tu ID de cuenta.
-- **Idempotencia**: si ejecutas el comando dos veces, LocalStack devuelve la misma
-  URL sin errores.
+**What you learn:**
+- **SQS (Simple Queue Service)** is a decoupled messaging buffer. In
+  traditional middleware, this is equivalent to a *JMS Queue* (TIBCO EMS, IBM MQ,
+  ActiveMQ). In MuleSoft, it would be the equivalent of using the Anypoint MQ or JMS connector.
+- The `QueueUrl` contains `000000000000` — this is the AWS account ID (12 digits). In
+  LocalStack it is always zeros; in real AWS it would be your account ID.
+- **Idempotence**: if you run the command twice, LocalStack returns the same
+  URL without errors.
 
 ---
 
-#### Paso 3: Desplegar API Gateway + Lambda proxy
+#### Step 3: Deploy API Gateway + Lambda proxy
 
 ```powershell
 .\scripts\api\create_rest_api.ps1
 ```
 
-**Que hace:**
-- Empaqueta y despliega una Lambda proxy (`src/api_handler.py`)
-- Crea un API Gateway REST con recurso `/orders` y metodo POST
-- Configura integracion `AWS_PROXY` que envia las peticiones HTTP a la Lambda proxy
-- La Lambda proxy reenvia el body a SQS usando boto3
-- Otorga permisos a API Gateway para invocar la Lambda
-- Despliega el API en un stage `dev`
+**What it does:**
+- Packages and deploys a proxy Lambda (`src/api_handler.py`)
+- Creates an API Gateway REST with `/orders` resource and POST method
+- Configures `AWS_PROXY` integration that sends HTTP requests to the proxy Lambda
+- The proxy Lambda forwards the body to SQS using boto3
+- Grants API Gateway permission to invoke the Lambda
+- Deploys the API to a `dev` stage
 
-**Output esperado:**
+**Expected output:**
 ```
 [1/7] Packaging proxy Lambda...
   [OK] Package created.
@@ -229,54 +229,54 @@ link-local (`169.254.1.2`) que Docker anade al bridge.
   Endpoint URL: http://127.0.0.1:4566/restapis/<api-id>/dev/_user_request_/orders
 ```
 
-**Que aprendes:**
-- **API Gateway** es el punto de entrada HTTP para APIs REST. En middleware
-  tradicional, equivale a un API Manager o ESB con endpoints HTTP.
-- **AWS_PROXY** (integracion tipo proxy) delega todo el request HTTP a una
-  Lambda, que es responsable de procesarlo y formatear la respuesta.
-- La **Lambda proxy** actua como un adaptor entre el mundo HTTP y el mundo
-  asincrono de SQS, similar a un *API Proxy* en MuleSoft o un *HTTP Connector*
-  en TIBCO.
-- Se usa `AWS_PROXY` en lugar de integracion directa `AWS -> SQS` porque
-  LocalStack 4.0.3 tiene un bug en el codigo de integraciones directas con
-  servicios (el parche de moto espera objetos pero recibe diccionarios).
+**What you learn:**
+- **API Gateway** is the HTTP entry point for REST APIs. In traditional
+  middleware, it is equivalent to an API Manager or ESB with HTTP endpoints.
+- **AWS_PROXY** (proxy-type integration) delegates the entire HTTP request to a
+  Lambda, which is responsible for processing it and formatting the response.
+- The **Lambda proxy** acts as an adaptor between the HTTP world and the
+  asynchronous world of SQS, similar to an *API Proxy* in MuleSoft or an *HTTP Connector*
+  in TIBCO.
+- `AWS_PROXY` is used instead of direct `AWS -> SQS` integration because
+  LocalStack 4.0.3 has a bug in direct service integration code
+  (the moto patch expects objects but receives dictionaries).
 
 ---
 
-#### Paso 4: Empaquetar la Lambda procesadora
+#### Step 4: Package the processor Lambda
 
 ```powershell
 .\scripts\lambda\package_lambda.ps1
 ```
 
-**Output esperado:**
+**Expected output:**
 ```
 [1/3] Preparing temp folder...
 [2/3] Creating ZIP with correct structure...
 [3/3] Done: C:\...\src\funcion_lambda.zip
 ```
 
-**Que aprendes:** AWS Lambda no recibe codigo fuente suelto. Necesita un archivo ZIP
-(o imagen de contenedor) con el codigo y sus dependencias. En la nube real, el
-limite es 50 MB comprimido. Este empaquetado es analogo a generar un `.jar` en
-MuleSoft o un `.ear` en TIBCO para desplegar en el servidor.
+**What you learn:** AWS Lambda does not receive loose source code. It needs a ZIP file
+(or container image) with the code and its dependencies. In the real cloud, the
+limit is 50 MB compressed. This packaging is analogous to generating a `.jar` in
+MuleSoft or an `.ear` in TIBCO for deploying to a server.
 
 ---
 
-#### Paso 5: Desplegar la funcion Lambda procesadora
+#### Step 5: Deploy the processor Lambda function
 
 ```powershell
 .\scripts\lambda\deploy_lambda.ps1
 ```
 
-**Que hace:**
-- Comprueba si la funcion ya existe (`get-function`)
-- Si existe: actualiza solo el codigo (`update-function-code`)
-- Si no existe: la crea con todos los parametros (`create-function`)
-- **Espera a que la funcion pase de `Pending` a `Active`** usando
+**What it does:**
+- Checks if the function already exists (`get-function`)
+- If it exists: updates only the code (`update-function-code`)
+- If it does not exist: creates it with all parameters (`create-function`)
+- **Waits for the function to transition from `Pending` to `Active`** using
   `lambda wait function-active-v2`
 
-**Output esperado (primera vez):**
+**Expected output (first time):**
 ```
 [1/3] Checking if Lambda function 'procesador-pedidos-lambda' already exists...
   -> Function does not exist. Creating new function...
@@ -287,39 +287,39 @@ MuleSoft o un `.ear` en TIBCO para desplegar en el servidor.
   [OK] Function is now Active -- ready to receive events.
 ```
 
-**Que aprendes:**
+**What you learn:**
 
-Cada parametro del `create-function` tiene un equivalente en middleware tradicional:
+Each parameter of `create-function` has an equivalent in traditional middleware:
 
-| Parametro AWS | Que hace | Equivalente MuleSoft / TIBCO |
+| AWS Parameter | What it does | MuleSoft / TIBCO Equivalent |
 |--------------|----------|------------------------------|
-| `--function-name` | Nombre del servicio | App name en CloudHub |
-| `--runtime python3.12` | Entorno de ejecucion | Version del Mule Runtime |
-| `--role arn:aws:iam::...` | Permisos de seguridad | Roles / Policies |
-| `--handler index.lambda_handler` | Punto de entrada al codigo | Inbound Flow |
-| `--zip-file fileb://...` | Codigo empaquetado | `.jar` de Anypoint Studio |
+| `--function-name` | Service name | App name in CloudHub |
+| `--runtime python3.12` | Execution environment | Mule Runtime version |
+| `--role arn:aws:iam::...` | Security permissions | Roles / Policies |
+| `--handler index.lambda_handler` | Code entry point | Inbound Flow |
+| `--zip-file fileb://...` | Packaged code | Anypoint Studio `.jar` |
 
-El **ARN (Amazon Resource Name)** es el DNI universal de cualquier recurso en AWS:
+The **ARN (Amazon Resource Name)** is the universal identifier for any resource in AWS:
 ```
-arn:particion:servicio:region:cuenta:tipo/recurso
+arn:partition:service:region:account:type/resource
 ```
 
-La funcion Lambda se crea en estado `Pending` — igual que en AWS real, donde el
-servicio necesita tiempo para preparar el entorno de ejecucion.
+The Lambda function is created in `Pending` state — just like in real AWS, where the
+service needs time to prepare the execution environment.
 
 ---
 
-#### Paso 6: Conectar SQS -> Lambda (EL FIX)
+#### Step 6: Connect SQS -> Lambda (THE FIX)
 
 ```powershell
 .\scripts\lambda\create_trigger.ps1
 ```
 
-**Que hace:**
-- Crea un **event source mapping** entre la cola SQS y la funcion Lambda
-- Sin esto, la Lambda existe pero nunca se invoca al llegar mensajes a la cola
+**What it does:**
+- Creates an **event source mapping** between the SQS queue and the Lambda function
+- Without this, the Lambda exists but is never invoked when messages arrive in the queue
 
-**Output esperado:**
+**Expected output:**
 ```
 [1/4] Verifying SQS queue 'cola-pedidos-ecommerce' exists...
   [OK] Queue found.
@@ -333,17 +333,17 @@ servicio necesita tiempo para preparar el entorno de ejecucion.
   [OK] Event source mapping created! UUID: <uuid>
 ```
 
-**Que aprendes (concepto clave del proyecto):**
-- **Event Source Mapping** es el puente entre SQS (productor) y Lambda (consumidor).
-  Sin el mapping, la Lambda es como un worker de MuleSoft desplegado sin un inbound
-  endpoint JMS.
-- SQS hace **polling** periodico a la Lambda: cada pocos segundos pregunta si hay
-  mensajes nuevos y los envia en lotes de hasta 10.
-- La Lambda debe devolver exito explicito para que SQS elimine el mensaje.
+**What you learn (key project concept):**
+- **Event Source Mapping** is the bridge between SQS (producer) and Lambda (consumer).
+  Without the mapping, the Lambda is like a MuleSoft worker deployed without an inbound
+  JMS endpoint.
+- SQS does **periodic polling** of the Lambda: every few seconds it checks if there are
+  new messages and sends them in batches of up to 10.
+- The Lambda must return explicit success for SQS to delete the message.
 
 ---
 
-#### Paso 7: Probar con Postman
+#### Step 7: Test with Postman
 
 ```
 POST http://127.0.0.1:4566/restapis/<api-id>/dev/_user_request_/orders
@@ -351,37 +351,37 @@ Content-Type: application/json
 Body: {"id_pedido": 2001, "cliente": "postman-test", "total": 45.50}
 ```
 
-**Output esperado:**
+**Expected output:**
 ```json
 {
-    "message": "Pedido recibido y encolado",
+    "message": "Order received and queued",
     "messageId": "<uuid>",
     "pedido": { "id_pedido": 2001, "cliente": "postman-test", "total": 45.5 }
 }
 ```
 
-O via curl:
+Or via curl:
 ```powershell
 curl.exe -X POST http://127.0.0.1:4566/restapis/<api-id>/dev/_user_request_/orders ^
   -H "Content-Type: application/json" ^
   -d "{\"id_pedido\":2001,\"cliente\":\"test\",\"total\":45.5}"
 ```
 
-**Que aprendes:**
-- El flujo completo sincrono-asincrono: Postman recibe respuesta 200 inmediata,
-  mientras SQS encola el mensaje para procesamiento asincrono por la Lambda.
-- La Lambda proxy es un *adaptor* que separa el protocolo HTTP del procesamiento
-  de fondo, igual que un *API Proxy* en MuleSoft.
+**What you learn:**
+- The complete synchronous-asynchronous flow: Postman receives an immediate 200 response,
+  while SQS enqueues the message for asynchronous processing by the Lambda.
+- The Lambda proxy is an *adaptor* that separates the HTTP protocol from background
+  processing, just like an *API Proxy* in MuleSoft.
 
 ---
 
-#### Paso 8: Verificar la ejecucion de la Lambda
+#### Step 8: Verify Lambda execution
 
 ```powershell
 .\scripts\lambda\verify_logs.ps1
 ```
 
-**Output esperado:**
+**Expected output:**
 ```
 [SEARCH] Checking Lambda logs for 'procesador-pedidos-lambda'...
 
@@ -391,16 +391,16 @@ curl.exe -X POST http://127.0.0.1:4566/restapis/<api-id>/dev/_user_request_/orde
 --- Lambda Executor Containers ---
   Container: localstack-pipeline-lambda-<hash>
     START RequestId: <uuid> Version: $LATEST
-    Procesando Pedido #1001
-    Cliente: lherna06
-    Importe total: 89.95 EUR
-    Pedido #1001 integrado con exito.
+    Processing Order #1001
+    Client: lherna06
+    Total amount: 89.95 EUR
+    Order #1001 integrated successfully.
     END RequestId: <uuid>
     REPORT RequestId: <uuid> Duration: xxx ms
 
 --- CloudWatch Logs ---
   START RequestId: <uuid>
-  Procesando Pedido #1001
+  Processing Order #1001
   ...
 
 --- Summary ---
@@ -408,88 +408,87 @@ curl.exe -X POST http://127.0.0.1:4566/restapis/<api-id>/dev/_user_request_/orde
 [OK] 1 Lambda executor container(s) are running.
 ```
 
-**Que aprendes:**
-- Cada invocacion Lambda corre en un contenedor aislado, replicando el sandbox
-  de AWS real.
-- Ciclo de vida: `START` -> codigo -> `END` + `REPORT` (duracion, memoria).
-- CloudWatch Logs captura los `print()` de Python.
-- Cuando el handler devuelve 200, SQS elimina el mensaje automaticamente.
+**What you learn:**
+- Each Lambda invocation runs in an isolated container, replicating the real AWS sandbox.
+- Lifecycle: `START` -> code -> `END` + `REPORT` (duration, memory).
+- CloudWatch Logs captures Python `print()` statements.
+- When the handler returns 200, SQS automatically deletes the message.
 
 ---
 
-### 3. Diagnostico avanzado
+### 3. Advanced diagnostics
 
 ```powershell
-# Limpiar solo contenedores ejecutores (deja LocalStack corriendo)
+# Clean up only executor containers (leaves LocalStack running)
 .\scripts\cleanup_containers.ps1
 
-# Dump completo de logs a logs/localstack_dump_<timestamp>.log
+# Full log dump to logs/localstack_dump_<timestamp>.log
 .\scripts\dump_logs.ps1
 ```
 
-### 4. Limpieza total
+### 4. Full cleanup
 
 ```powershell
 .\scripts\teardown.ps1
-.\scripts\teardown.ps1 -Hard    # Forzado
+.\scripts\teardown.ps1 -Hard    # Force
 ```
 
 ---
 
-## Mapa de conceptos: AWS <-> Middleware tradicional
+## Concept map: AWS <-> Traditional Middleware
 
-| Concepto | AWS | MuleSoft / TIBCO |
+| Concept | AWS | MuleSoft / TIBCO |
 |----------|-----|------------------|
-| Punto de entrada HTTP | API Gateway | API Manager / ESB HTTP endpoint |
-| Adaptor HTTP -> cola | Lambda proxy | API Proxy / HTTP Connector |
-| Cola de mensajes | SQS | JMS Queue / Anypoint MQ |
-| Procesador de fondo | Lambda (procesadora) | Mule Flow / TIBCO BW Process |
-| Trigger desacoplado | Event Source Mapping | Inbound Endpoint / JMS Receiver |
-| Evento | Mensaje JSON / SQS event | Mule Message / TIBCO JMS Message |
-| Permisos | IAM Role | Policy / Client ID |
+| HTTP entry point | API Gateway | API Manager / ESB HTTP endpoint |
+| HTTP -> queue adaptor | Lambda proxy | API Proxy / HTTP Connector |
+| Message queue | SQS | JMS Queue / Anypoint MQ |
+| Background processor | Lambda (processor) | Mule Flow / TIBCO BW Process |
+| Decoupled trigger | Event Source Mapping | Inbound Endpoint / JMS Receiver |
+| Event | JSON message / SQS event | Mule Message / TIBCO JMS Message |
+| Permissions | IAM Role | Policy / Client ID |
 | Logs | CloudWatch Logs | Mule logs / TIBCO Administrator |
-| Entorno local | LocalStack | Anypoint Studio / TIBCO Designer |
+| Local environment | LocalStack | Anypoint Studio / TIBCO Designer |
 | IaC | AWS CLI / CloudFormation | Anypoint Studio deploy |
 
 ---
 
 ## Troubleshooting
 
-| Sintoma | Causa | Solucion |
+| Symptom | Cause | Solution |
 |---------|-------|----------|
-| LocalStack no arranca | Puerto 4566 ocupado | `netstat -ano \| findstr :4566` y mata el proceso |
-| AWS CLI no conecta con LocalStack | Falta `--network=host` | Anade `--network=host` al comando `podman run` |
-| Health check no encuentra LocalStack | Solo accesible via WSL2 IP | El script detecta la IP de WSL2 automaticamente |
-| Lambda no se invoca al enviar mensaje | Falta event source mapping | Ejecuta `create_trigger.ps1` |
-| Lambda se ejecuta pero no hay logs | LocalStack usa contenedores separados | `verify_logs.ps1` ya los inspecciona |
-| Lambda da error "Pending" | La funcion no termino de activarse | `deploy_lambda.ps1` espera a `Active` |
-| JSON SQS se rompe al enviarlo | PowerShell quoting | `publish_message_to_queue.ps1` usa archivo temporal |
-| Contenedor `localstack-pipeline` ya existe | Ejecucion previa | Responde "y" al prompt o usa `-Recreate` |
-| Se acumulan ejecutores Lambda | Un contenedor por invocacion | Ejecuta `cleanup_containers.ps1` |
-| API Gateway devuelve 404 | Stage no desplegado | Revisar deployments con `get-deployments` |
-| API Gateway devuelve 502 | Lambda proxy no existe o falla | Revisar logs de la proxy en CloudWatch |
+| LocalStack does not start | Port 4566 in use | `netstat -ano \| findstr :4566` and kill the process |
+| AWS CLI does not connect to LocalStack | Missing `--network=host` | Add `--network=host` to the `podman run` command |
+| Health check cannot find LocalStack | Only accessible via WSL2 IP | The script detects the WSL2 IP automatically |
+| Lambda not invoked when message is sent | Missing event source mapping | Run `create_trigger.ps1` |
+| Lambda runs but no logs | LocalStack uses separate containers | `verify_logs.ps1` inspects them already |
+| Lambda gives "Pending" error | The function did not finish activating | `deploy_lambda.ps1` waits for `Active` |
+| SQS JSON breaks when sending | PowerShell quoting | `publish_message_to_queue.ps1` uses a temporary file |
+| Container `localstack-pipeline` already exists | Previous execution | Respond "y" to the prompt or use `-Recreate` |
+| Lambda executors accumulate | One container per invocation | Run `cleanup_containers.ps1` |
+| API Gateway returns 404 | Stage not deployed | Check deployments with `get-deployments` |
+| API Gateway returns 502 | Proxy Lambda does not exist or fails | Check proxy logs in CloudWatch |
 
 ---
 
-## Resumen de aprendizaje
+## Learning summary
 
-Al completar este pipeline has practicado:
+Upon completing this pipeline you have practiced:
 
-1. **Event-Driven Architecture (EDA)** — desacoplamiento total entre ingesta HTTP,
-   cola de mensajes y procesamiento de fondo
-2. **API Gateway** — creacion de REST APIs, recursos, metodos, integraciones
-   `AWS_PROXY`, despliegue por stages
-3. **AWS Lambda** — dos funciones distintas: proxy (adaptador HTTP->SQS) y
-   procesadora (logica de negocio desde SQS)
-4. **AWS SQS** — colas, envio, recepcion, ARNs, payload quoting
-5. **Event Source Mapping** — puente SQS -> Lambda con polling automatico
-6. **LocalStack 4.x** — emulacion local, red personalizada con Podman para
-   ejecutores Lambda, health checks
-7. **Podman** — contenedores rootless, redes, volumenes, socket Docker,
-   resolucion de problemas WSL2/Windows
-8. **PowerShell avanzado** — splatting, quoting, archivos temporales,
-   orquestacion, manejo de errores de parsing
-9. **Patrones de middleware** — equivalentes entre AWS serverless y
+1. **Event-Driven Architecture (EDA)** — complete decoupling between HTTP ingestion,
+   message queue, and background processing
+2. **API Gateway** — creation of REST APIs, resources, methods, `AWS_PROXY`
+   integrations, stage deployment
+3. **AWS Lambda** — two distinct functions: proxy (HTTP->SQS adaptor) and
+   processor (business logic from SQS)
+4. **AWS SQS** — queues, sending, receiving, ARNs, payload quoting
+5. **Event Source Mapping** — SQS -> Lambda bridge with automatic polling
+6. **LocalStack 4.x** — local emulation, custom Podman network for
+   Lambda executors, health checks
+7. **Podman** — rootless containers, networks, volumes, Docker socket,
+   WSL2/Windows troubleshooting
+8. **Advanced PowerShell** — splatting, quoting, temporary files,
+   orchestration, parsing error handling
+9. **Middleware patterns** — equivalents between AWS serverless and
    MuleSoft/TIBCO: API Gateway vs API Manager, Lambda proxy vs API Proxy,
    SQS vs JMS, Event Source Mapping vs Inbound Endpoint
 
@@ -497,59 +496,57 @@ Al completar este pipeline has practicado:
 
 ## Terraform Implementation (Infrastructure as Code)
 
-Ademas del pipeline basado en scripts de PowerShell, el proyecto incluye una
-implementacion paralela usando **Terraform** como herramienta de Infrastructure
-as Code (IaC). Esta version reemplaza los comandos imperativos de AWS CLI por
-recursos declarativos en HCL, gestionando automaticamente el orden de creacion,
-dependencias y estado de la infraestructura.
+In addition to the PowerShell script-based pipeline, the project includes a
+parallel implementation using **Terraform** as the Infrastructure as Code (IaC) tool.
+This version replaces the imperative AWS CLI commands with declarative HCL resources,
+automatically managing the creation order, dependencies, and infrastructure state.
 
-> Los scripts originales en `scripts/` se conservan integros como referencia
-> educativa. La implementacion Terraform es autonoma dentro de `terraform/`.
+> The original scripts in `scripts/` are kept intact as an educational
+> reference. The Terraform implementation is self-contained within `terraform/`.
 
 ---
 
-### Directorio `terraform/`
+### `terraform/` directory
 
 ```
 terraform/
-├── versions.tf                 # Versiones de Terraform y providers
-├── provider.tf                 # Provider AWS apuntando a LocalStack
-├── variables.tf                # Variables de entrada
-├── locals.tf                   # Constantes locales (nombres, ARNs, tags)
-├── iam.tf                      # Rol y politica de ejecucion para Lambda
-├── sqs.tf                      # Cola SQS
-├── lambda.tf                   # Funciones Lambda (procesadora + proxy)
-├── triggers.tf                 # Event source mapping SQS -> Lambda + permiso API Gateway
-├── api_gateway.tf              # API Gateway REST + recurso /orders + metodo POST + integracion
-├── outputs.tf                  # Outputs: endpoint URL, ARNs, nombres
-├── terraform.tfvars.example    # Ejemplo de archivo de variables
+├── versions.tf                 # Terraform and provider versions
+├── provider.tf                 # AWS provider pointing to LocalStack
+├── variables.tf                # Input variables
+├── locals.tf                   # Local constants (names, ARNs, tags)
+├── iam.tf                      # Lambda execution role and policy
+├── sqs.tf                      # SQS queue
+├── lambda.tf                   # Lambda functions (processor + proxy)
+├── triggers.tf                 # SQS -> Lambda event source mapping + API Gateway permission
+├── api_gateway.tf              # API Gateway REST + /orders resource + POST method + integration
+├── outputs.tf                  # Outputs: endpoint URL, ARNs, names
+├── terraform.tfvars.example    # Example variables file
 │
 ├── lib/
-│   └── Get-Terraform.ps1       # Helper: localiza terraform.exe portatil
+│   └── Get-Terraform.ps1       # Helper: locates portable terraform.exe
 │
-├── download_terraform.ps1      # Descarga terraform.exe portatil a tools/
-├── start_localstack.ps1        # Arranca LocalStack en Podman
-├── stop_localstack.ps1         # Detiene el contenedor de LocalStack
-├── apply.ps1                   # Orquestador: init + apply + outputs
-├── destroy.ps1                 # Destruye recursos + opcionalmente para LocalStack
-├── test_message.ps1            # Envia un pedido de prueba a SQS
-└── verify.ps1                  # Verifica logs de la Lambda procesadora
+├── download_terraform.ps1      # Downloads portable terraform.exe to tools/
+├── start_localstack.ps1        # Starts LocalStack in Podman
+├── stop_localstack.ps1         # Stops the LocalStack container
+├── apply.ps1                   # Orchestrator: init + apply + outputs
+├── destroy.ps1                 # Destroys resources + optionally stops LocalStack
+├── test_message.ps1            # Sends a test order to SQS
+└── verify.ps1                  # Verifies processor Lambda logs
 ```
 
 ---
 
-### Descripcion de los archivos Terraform (.tf)
+### Description of Terraform files (.tf)
 
-#### `versions.tf` — Restricciones de version
+#### `versions.tf` — Version constraints
 
-Define las versiones minimas de Terraform (>= 1.6) y los providers necesarios:
-`hashicorp/aws` (~> 5.0) y `hashicorp/archive` (~> 2.0). El provider `archive`
-se usa para empaquetar automaticamente el codigo Python de las Lambdas en
-archivos ZIP.
+Defines the minimum Terraform (>= 1.6) and provider versions:
+`hashicorp/aws` (~> 5.0) and `hashicorp/archive` (~> 2.0). The `archive` provider
+is used to automatically package the Python Lambda code into ZIP files.
 
-#### `provider.tf` — Conexion con LocalStack
+#### `provider.tf` — Connection to LocalStack
 
-Configura el provider AWS para que apunte a LocalStack en lugar de a AWS real:
+Configures the AWS provider to point to LocalStack instead of real AWS:
 
 ```hcl
 provider "aws" {
@@ -572,17 +569,17 @@ provider "aws" {
 }
 ```
 
-- `skip_*` flags: necesarios porque LocalStack usa credenciales ficticias
-  (`mock-access-key` / `mock-secret-key`) y no tiene metadata real de AWS
-- `endpoints`: cada servicio AWS se redirige a `http://localhost:4566`
-  (o al endpoint configurado en `var.localstack_endpoint`)
+- `skip_*` flags: required because LocalStack uses fake credentials
+  (`mock-access-key` / `mock-secret-key`) and has no real AWS metadata
+- `endpoints`: each AWS service is redirected to `http://localhost:4566`
+  (or the endpoint configured in `var.localstack_endpoint`)
 
-**Diferencia clave con los scripts:** En la version PowerShell, cada comando
-AWS CLI se ejecuta dentro de un contenedor Podman con `--network=host`. En
-Terraform, el provider habla directamente con LocalStack via HTTP desde el
-host, sin necesidad de contenedores intermediarios.
+**Key difference from the scripts:** In the PowerShell version, each AWS CLI
+command runs inside a Podman container with `--network=host`. In Terraform,
+the provider communicates directly with LocalStack via HTTP from the host,
+without intermediary containers.
 
-#### `variables.tf` — Parametrizacion
+#### `variables.tf` — Parameterization
 
 ```hcl
 variable "region"                { default = "us-east-1" }
@@ -591,13 +588,13 @@ variable "lambda_timeout"        { default = 30 }
 variable "lambda_memory_size"    { default = 128 }
 ```
 
-Permite cambiar la region, el endpoint de LocalStack (util si se ejecuta en
-WSL2 con una IP diferente), o los recursos de las Lambdas sin modificar el
-codigo fuente.
+Allows changing the region, the LocalStack endpoint (useful if running on
+WSL2 with a different IP), or the Lambda resources without modifying the
+source code.
 
-#### `locals.tf` — Constantes del proyecto
+#### `locals.tf` — Project constants
 
-Centraliza todos los nombres de recursos y valores derivados:
+Centralizes all resource names and derived values:
 
 ```hcl
 locals {
@@ -608,13 +605,13 @@ locals {
 }
 ```
 
-En los scripts PowerShell, estos valores estaban repetidos en cada archivo
+In the PowerShell scripts, these values were repeated in every file
 (`create_queue.ps1`, `deploy_lambda.ps1`, `create_rest_api.ps1`, etc.).
-Terraform los centraliza en un solo lugar, eliminando duplicacion.
+Terraform centralizes them in one place, eliminating duplication.
 
-#### `iam.tf` — Seguridad (Roles y politicas)
+#### `iam.tf` — Security (Roles and policies)
 
-Crea un rol de ejecucion para Lambda con una politica que permite:
+Creates a Lambda execution role with a policy that allows:
 
 ```hcl
 resource "aws_iam_role" "lambda_exec" {
@@ -630,35 +627,35 @@ resource "aws_iam_role" "lambda_exec" {
 }
 ```
 
-**Permisos concedidos:**
-- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` — escritura
-  en CloudWatch Logs
-- `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` — las
-  Lambdas necesitan estos permisos para consumir mensajes de SQS
-- `sqs:SendMessage` — la Lambda proxy necesita encolar mensajes
+**Permissions granted:**
+- `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents` — write
+  to CloudWatch Logs
+- `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` — the
+  Lambdas need these permissions to consume messages from SQS
+- `sqs:SendMessage` — the proxy Lambda needs to enqueue messages
 
-En la version PowerShell, el rol se referenciaba con un ARN quemado
-(`arn:aws:iam::000000000000:role/lambda-ex`). En Terraform se crea
-explícitamente, lo que lo hace portable a AWS real.
+In the PowerShell version, the role was referenced with a hardcoded ARN
+(`arn:aws:iam::000000000000:role/lambda-ex`). In Terraform it is created
+explicitly, making it portable to real AWS.
 
-#### `sqs.tf` — Cola de mensajes
+#### `sqs.tf` — Message queue
 
 ```hcl
 resource "aws_sqs_queue" "orders" {
   name                       = "cola-pedidos-ecommerce"
   visibility_timeout_seconds = 30
   max_message_size           = 262144
-  message_retention_seconds  = 345600  # 4 dias
+  message_retention_seconds  = 345600  # 4 days
 }
 ```
 
-Convierte 3 lineas de AWS CLI en un recurso declarativo. Terraform gestiona
-la idempotencia: si la cola ya existe, no la duplica.
+Converts 3 lines of AWS CLI into a declarative resource. Terraform manages
+idempotence: if the queue already exists, it does not duplicate it.
 
-#### `lambda.tf` — Funciones Lambda
+#### `lambda.tf` — Lambda functions
 
-Utiliza el data source `archive_file` para empaquetar automaticamente el codigo
-Python en ZIP:
+Uses the `archive_file` data source to automatically package the Python
+code into ZIP:
 
 ```hcl
 data "archive_file" "processor" {
@@ -677,36 +674,36 @@ resource "aws_lambda_function" "processor" {
 }
 ```
 
-**Que hace automaticamente:**
-- Comprime `src/index.py` en `funcion_lambda.zip`
-- Sube el ZIP a LocalStack como codigo de la funcion
-- Si el archivo fuente cambia, detecta el cambio por el hash SHA256 y
-  actualiza solo el codigo (sin recrear la funcion)
-- Espera a que la funcion pase a estado `Active`
+**What it does automatically:**
+- Compresses `src/index.py` into `funcion_lambda.zip`
+- Uploads the ZIP to LocalStack as the function code
+- If the source file changes, it detects the change via SHA256 hash and
+  updates only the code (without recreating the function)
+- Waits for the function to reach `Active` state
 
-En los scripts PowerShell, este proceso requeria dos scripts separados:
-`package_lambda.ps1` (empaquetar) y `deploy_lambda.ps1` (desplegar + esperar).
-Terraform lo unifica en un solo recurso.
+In the PowerShell scripts, this process required two separate scripts:
+`package_lambda.ps1` (packaging) and `deploy_lambda.ps1` (deploy + wait).
+Terraform unifies them into a single resource.
 
 ```hcl
 resource "aws_lambda_function" "proxy" {
-  # Misma estructura, pero usando src/api_handler.py
+  # Same structure, but using src/api_handler.py
   handler = "api_handler.lambda_handler"
 }
 ```
 
-**Nota importante:** No se define la variable de entorno `AWS_ENDPOINT_URL`.
-LocalStack 4.x inyecta automaticamente la URL correcta del endpoint en el
-contenedor ejecutor de la Lambda. Si se definiera explicitamente como
-`http://localhost:4566`, la Lambda proxy fallaria porque dentro del contenedor
-ejecutor `localhost` apunta a si mismo, no a LocalStack.
+**Important note:** The `AWS_ENDPOINT_URL` environment variable is not defined.
+LocalStack 4.x automatically injects the correct endpoint URL into the Lambda
+executor container. If it were explicitly set to `http://localhost:4566`, the
+proxy Lambda would fail because inside the executor container `localhost` points
+to itself, not to LocalStack.
 
-#### `triggers.tf` — Conexiones entre servicios
+#### `triggers.tf` — Connections between services
 
-Dos recursos clave:
+Two key resources:
 
 ```hcl
-# Event source mapping: SQS -> Lambda procesadora
+# Event source mapping: SQS -> Processor Lambda
 resource "aws_lambda_event_source_mapping" "sqs_to_processor" {
   event_source_arn = aws_sqs_queue.orders.arn
   function_name    = aws_lambda_function.processor.arn
@@ -714,7 +711,7 @@ resource "aws_lambda_event_source_mapping" "sqs_to_processor" {
   batch_size       = 10
 }
 
-# Permiso: API Gateway -> Lambda proxy
+# Permission: API Gateway -> Proxy Lambda
 resource "aws_lambda_permission" "api_gateway_invoke_proxy" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.proxy.function_name
@@ -723,28 +720,28 @@ resource "aws_lambda_permission" "api_gateway_invoke_proxy" {
 }
 ```
 
-El **event source mapping** es el equivalente al script `create_trigger.ps1`.
-Sin este recurso, la Lambda procesadora existe pero nunca se invoca al llegar
-mensajes a la cola.
+The **event source mapping** is the equivalent of the `create_trigger.ps1` script.
+Without this resource, the processor Lambda exists but is never invoked when
+messages arrive in the queue.
 
-El **Lambda permission** es el equivalente al comando `lambda add-permission`
-en `create_rest_api.ps1`. Sin este permiso, API Gateway no puede invocar la
-Lambda proxy.
+The **Lambda permission** is the equivalent of the `lambda add-permission` command
+in `create_rest_api.ps1`. Without this permission, API Gateway cannot invoke the
+proxy Lambda.
 
-#### `api_gateway.tf` — API REST
+#### `api_gateway.tf` — REST API
 
-Define los 5 recursos necesarios para exponer el endpoint HTTP:
+Defines the 5 resources needed to expose the HTTP endpoint:
 
 ```hcl
-resource "aws_api_gateway_rest_api" "ecommerce" { }           # La API en si
-resource "aws_api_gateway_resource" "orders" { }               # El recurso /orders
-resource "aws_api_gateway_method" "post_orders" { }            # Metodo POST
-resource "aws_api_gateway_integration" "lambda_proxy" { }     # Integracion AWS_PROXY
-resource "aws_api_gateway_deployment" "dev" { }                # Despliegue al stage dev
+resource "aws_api_gateway_rest_api" "ecommerce" { }           # The API itself
+resource "aws_api_gateway_resource" "orders" { }               # The /orders resource
+resource "aws_api_gateway_method" "post_orders" { }            # POST method
+resource "aws_api_gateway_integration" "lambda_proxy" { }     # AWS_PROXY integration
+resource "aws_api_gateway_deployment" "dev" { }                # Deployment to dev stage
 ```
 
-El deployment incluye un `triggers` para forzar un nuevo despliegue cuando la
-integracion cambia:
+The deployment includes a `triggers` to force a new deployment when the
+integration changes:
 
 ```hcl
 resource "aws_api_gateway_deployment" "dev" {
@@ -754,10 +751,10 @@ resource "aws_api_gateway_deployment" "dev" {
 }
 ```
 
-Sin este trigger, Terraform no detectaria que un cambio en la integracion
-requiere un nuevo despliegue (un problema conocido de Terraform + API Gateway).
+Without this trigger, Terraform would not detect that a change in the integration
+requires a new deployment (a known issue with Terraform + API Gateway).
 
-#### `outputs.tf` — Informacion de salida
+#### `outputs.tf` — Output information
 
 ```hcl
 output "api_endpoint" {
@@ -768,202 +765,201 @@ output "processor_lambda_arn"    { value = aws_lambda_function.processor.arn }
 output "proxy_lambda_arn"        { value = aws_lambda_function.proxy.arn }
 ```
 
-Equivalentes a los mensajes de exito que los scripts PowerShell mostraban al
-final de cada paso.
+Equivalent to the success messages that the PowerShell scripts displayed at
+the end of each step.
 
 ---
 
-### Scripts PowerShell de soporte (en `terraform/`)
+### Supporting PowerShell scripts (in `terraform/`)
 
-Aunque la infraestructura se define en Terraform, algunos scripts PowerShell
-son necesarios para el entorno local:
+Although the infrastructure is defined in Terraform, some PowerShell scripts
+are necessary for the local environment:
 
-| Script | Funcion | Equivalente en `scripts/` |
+| Script | Function | Equivalent in `scripts/` |
 |--------|---------|---------------------------|
-| `start_localstack.ps1` | Arranca LocalStack en Podman y espera health check | `scripts/start_localstack.ps1` |
-| `stop_localstack.ps1` | Detiene o elimina el contenedor LocalStack | (nuevo, basado en `scripts/teardown.ps1`) |
-| `apply.ps1` | Orquestador: verifica LocalStack, `terraform init`, `terraform apply` | `scripts/deploy_all.ps1` |
-| `destroy.ps1` | `terraform destroy` + opcionalmente para LocalStack | `scripts/teardown.ps1` |
-| `test_message.ps1` | Envia un mensaje JSON de prueba a SQS | `scripts/queues/publish_message_to_queue.ps1` |
-| `verify.ps1` | Inspecciona logs de la Lambda en contenedores ejecutores y CloudWatch | `scripts/lambda/verify_logs.ps1` |
-| `download_terraform.ps1` | Descarga terraform.exe portatil a `tools/` (sin instalacion global) | (nuevo) |
-| `lib/Get-Terraform.ps1` | Helper para localizar terraform.exe: `tools/` -> PATH -> descarga | (nuevo) |
+| `start_localstack.ps1` | Starts LocalStack in Podman and waits for health check | `scripts/start_localstack.ps1` |
+| `stop_localstack.ps1` | Stops or removes the LocalStack container | (new, based on `scripts/teardown.ps1`) |
+| `apply.ps1` | Orchestrator: verifies LocalStack, `terraform init`, `terraform apply` | `scripts/deploy_all.ps1` |
+| `destroy.ps1` | `terraform destroy` + optionally stops LocalStack | `scripts/teardown.ps1` |
+| `test_message.ps1` | Sends a test JSON message to SQS | `scripts/queues/publish_message_to_queue.ps1` |
+| `verify.ps1` | Inspects Lambda logs in executor containers and CloudWatch | `scripts/lambda/verify_logs.ps1` |
+| `download_terraform.ps1` | Downloads portable terraform.exe to `tools/` (no global install) | (new) |
+| `lib/Get-Terraform.ps1` | Helper to locate terraform.exe: `tools/` -> PATH -> download | (new) |
 
-**Diferencia clave:** Los scripts en `scripts/` ejecutan comandos AWS CLI
-directamente. Los scripts en `terraform/` ejecutan `terraform apply` /
-`terraform destroy`, que a su vez llama al provider AWS.
+**Key difference:** The scripts in `scripts/` run AWS CLI commands directly.
+The scripts in `terraform/` run `terraform apply` / `terraform destroy`, which in turn calls the AWS provider.
 
 ---
 
-### Flujo de ejecucion Terraform
+### Terraform execution flow
 
 ```
 Postman / curl
      |
      v
-API Gateway (REST)                   <- Creado por: aws_api_gateway_*
+API Gateway (REST)                   <- Created by: aws_api_gateway_*
      |        /orders POST
      v
-Lambda proxy (api_handler.py)        <- Creado por: aws_lambda_function.proxy
-     |                                    Permiso:  aws_lambda_permission
+Lambda proxy (api_handler.py)        <- Created by: aws_lambda_function.proxy
+     |                                    Permission: aws_lambda_permission
      v
-SQS "cola-pedidos-ecommerce"         <- Creado por: aws_sqs_queue.orders
+SQS "cola-pedidos-ecommerce"         <- Created by: aws_sqs_queue.orders
      |
      v
-Lambda procesadora                   <- Creado por: aws_lambda_function.processor
+Processor Lambda                     <- Created by: aws_lambda_function.processor
      | (index.lambda_handler)            Trigger:   aws_lambda_event_source_mapping
      v
-CloudWatch Logs                      <- Logs gestionados por el rol IAM
+CloudWatch Logs                      <- Logs managed by the IAM role
 ```
 
-**Orden de creacion (gestionado automaticamente por Terraform):**
+**Creation order (automatically managed by Terraform):**
 
-1. `aws_iam_role.lambda_exec` — el rol debe existir antes que las Lambdas
-2. `aws_sqs_queue.orders` — la cola debe existir antes que el trigger
-3. `aws_lambda_function.proxy` + `aws_lambda_function.processor` — las
-   Lambdas necesitan el rol IAM
-4. `aws_lambda_event_source_mapping` — necesita la cola y la Lambda
-5. `aws_api_gateway_*` — necesita la Lambda proxy
-6. `aws_lambda_permission` — necesita la Lambda proxy y la API Gateway
+1. `aws_iam_role.lambda_exec` — the role must exist before the Lambdas
+2. `aws_sqs_queue.orders` — the queue must exist before the trigger
+3. `aws_lambda_function.proxy` + `aws_lambda_function.processor` — the
+   Lambdas need the IAM role
+4. `aws_lambda_event_source_mapping` — needs the queue and the Lambda
+5. `aws_api_gateway_*` — needs the proxy Lambda
+6. `aws_lambda_permission` — needs the proxy Lambda and the API Gateway
 
-En los scripts PowerShell, este orden se controlaba manualmente en
-`deploy_all.ps1`. Terraform lo resuelve automaticamente analizando las
-referencias entre recursos.
+In the PowerShell scripts, this order was controlled manually in
+`deploy_all.ps1`. Terraform resolves it automatically by analyzing the
+references between resources.
 
 ---
 
-### Comparativa: Scripts vs Terraform
+### Comparison: Scripts vs Terraform
 
-| Aspecto | Scripts PowerShell (`scripts/`) | Terraform (`terraform/`) |
+| Aspect | PowerShell Scripts (`scripts/`) | Terraform (`terraform/`) |
 |---------|--------------------------------|--------------------------|
-| **Paradigma** | Imperativo (paso a paso) | Declarativo (estado deseado) |
-| **Idempotencia** | Implementada manualmente con `if exists...` | Automatica (Terraform compara estado) |
-| **Orden de creacion** | Orquestado en `deploy_all.ps1` | Grafo de dependencias automatico |
-| **AWS CLI** | Ejecutado dentro de contenedor Podman | Provider AWS via HTTP directo a LocalStack |
-| **Empaquetado Lambda** | Script separado `package_lambda.ps1` | `archive_file` data source automatico |
-| **Deteccion de cambios** | Manual (no detecta cambios en codigo) | Automatica via `source_code_hash` |
-| **Destruccion** | `teardown.ps1` (scripts ad-hoc) | `terraform destroy` |
-| **Estado** | No gestionado (comandos sueltos) | `terraform.tfstate` (rastrea todo) |
-| **Portabilidad** | Windows + Podman solamente | Cualquier SO + cualquier ejecutor |
-| **Produccion** | No (disenado solo para LocalStack) | Si (mismos recursos funcionan en AWS real) |
+| **Paradigm** | Imperative (step by step) | Declarative (desired state) |
+| **Idempotence** | Implemented manually with `if exists...` | Automatic (Terraform compares state) |
+| **Creation order** | Orchestrated in `deploy_all.ps1` | Automatic dependency graph |
+| **AWS CLI** | Executed inside Podman container | AWS provider via direct HTTP to LocalStack |
+| **Lambda packaging** | Separate `package_lambda.ps1` script | Automatic `archive_file` data source |
+| **Change detection** | Manual (does not detect code changes) | Automatic via `source_code_hash` |
+| **Destruction** | `teardown.ps1` (ad-hoc scripts) | `terraform destroy` |
+| **State** | Not managed (loose commands) | `terraform.tfstate` (tracks everything) |
+| **Portability** | Windows + Podman only | Any OS + any executor |
+| **Production** | No (designed only for LocalStack) | Yes (same resources work on real AWS) |
 
 ---
 
-### Flujo de trabajo completo (Terraform)
+### Complete workflow (Terraform)
 
 ```powershell
-# 0. Una sola vez: descargar Terraform portatil
+# 0. One-time: download portable Terraform
 cd terraform
 .\download_terraform.ps1
 
-# 1. Arrancar LocalStack
+# 1. Start LocalStack
 .\start_localstack.ps1 -Force
 
-# 2. Desplegar toda la infraestructura
+# 2. Deploy all infrastructure
 .\apply.ps1 -AutoApprove
 
-# 3. Probar con Postman o mediante script
+# 3. Test with Postman or via script
 .\test_message.ps1
 
-# 4. Verificar logs de la Lambda procesadora
+# 4. Verify processor Lambda logs
 .\verify.ps1
 
-# 5. Destruir todo al terminar
+# 5. Destroy everything when done
 .\destroy.ps1 -AutoApprove -AlsoStopLocalStack
 ```
 
-Sin necesidad de instalar Terraform globalmente: `download_terraform.ps1`
-descarga el binario portatil a `terraform/tools/terraform.exe`, y los scripts
-`apply.ps1` / `destroy.ps1` lo localizan automaticamente mediante
+No need to install Terraform globally: `download_terraform.ps1`
+downloads the portable binary to `terraform/tools/terraform.exe`, and the
+`apply.ps1` / `destroy.ps1` scripts locate it automatically via
 `lib/Get-Terraform.ps1`.
 
 ---
 
-### Mapa de conceptos: Scripts -> Terraform
+### Concept map: Scripts -> Terraform
 
-| Recurso | Script PowerShell | Recurso Terraform |
+| Resource | PowerShell Script | Terraform Resource |
 |---------|-------------------|-------------------|
-| Cola SQS | `scripts/queues/create_queue.ps1` | `aws_sqs_queue.orders` |
-| Lambda procesadora | `package_lambda.ps1` + `deploy_lambda.ps1` | `aws_lambda_function.processor` + `data.archive_file.processor` |
-| Lambda proxy | (dentro de `create_rest_api.ps1`) | `aws_lambda_function.proxy` + `data.archive_file.proxy` |
-| Trigger SQS -> Lambda | `scripts/lambda/create_trigger.ps1` | `aws_lambda_event_source_mapping.sqs_to_processor` |
+| SQS queue | `scripts/queues/create_queue.ps1` | `aws_sqs_queue.orders` |
+| Processor Lambda | `package_lambda.ps1` + `deploy_lambda.ps1` | `aws_lambda_function.processor` + `data.archive_file.processor` |
+| Proxy Lambda | (inside `create_rest_api.ps1`) | `aws_lambda_function.proxy` + `data.archive_file.proxy` |
+| SQS -> Lambda trigger | `scripts/lambda/create_trigger.ps1` | `aws_lambda_event_source_mapping.sqs_to_processor` |
 | API Gateway | `scripts/api/create_rest_api.ps1` | `aws_api_gateway_rest_api` + resource + method + integration + deployment |
-| Permiso API Gateway | (dentro de `create_rest_api.ps1`) | `aws_lambda_permission.api_gateway_invoke_proxy` |
-| Rol IAM | Quemado como ARN fijo | `aws_iam_role.lambda_exec` + `aws_iam_role_policy.lambda_exec` |
-| Esperar estado Active | `lambda wait function-active-v2` | Gestionado implicitamente por Terraform |
-| Variables repetidas | En cada script individual | Centralizadas en `locals.tf` y `variables.tf` |
+| API Gateway permission | (inside `create_rest_api.ps1`) | `aws_lambda_permission.api_gateway_invoke_proxy` |
+| IAM role | Hardcoded as fixed ARN | `aws_iam_role.lambda_exec` + `aws_iam_role_policy.lambda_exec` |
+| Wait for Active state | `lambda wait function-active-v2` | Implicitly managed by Terraform |
+| Repeated variables | In each individual script | Centralized in `locals.tf` and `variables.tf` |
 
 ---
 
-### Lo que se aprendio con la implementacion Terraform
+### What was learned with the Terraform implementation
 
-1. **Provider AWS con LocalStack** — configuracion de endpoints personalizados,
-   omision de validacion de credenciales, y diferencias entre LocalStack 3.x y 4.x
-2. **`archive_file` data source** — empaquetado automatico de Lambdas sin scripts
-   externos, deteccion de cambios via SHA256
-3. **API Gateway + Terraform** — manejo del trigger de deployment forzado para
-   detectar cambios en la integracion Lambda
-4. **Event Source Mapping** — recurso especifico de Terraform que conecta SQS
-   con Lambda, equivalente al `create-event-source-mapping` de AWS CLI
-5. **Manejo de errores en PowerShell** — diferencia entre `$LASTEXITCODE` y `$?`
-   para comandos externos, especialmente cuando el ejecutable no existe
-6. **Lambda executor networking** — comprension de que `localhost:4566` dentro
-   del contenedor ejecutor de LocalStack no apunta a LocalStack, y que el
-   entorno inyectado por LocalStack (`AWS_ENDPOINT_URL`) gestiona esto
-   automaticamente si no se sobrescribe
-7. **Portabilidad vs educacion** — la version PowerShell es mas educativa
-   (cada comando se ve explícitamente), mientras que Terraform es mas apto
-   para produccion (declarativo, stateful, portable)
+1. **AWS provider with LocalStack** — configuration of custom endpoints,
+   skipping credential validation, and differences between LocalStack 3.x and 4.x
+2. **`archive_file` data source** — automatic Lambda packaging without external
+   scripts, change detection via SHA256
+3. **API Gateway + Terraform** — handling the forced deployment trigger to
+   detect changes in the Lambda integration
+4. **Event Source Mapping** — specific Terraform resource that connects SQS
+   with Lambda, equivalent to the `create-event-source-mapping` AWS CLI command
+5. **Error handling in PowerShell** — difference between `$LASTEXITCODE` and `$?`
+   for external commands, especially when the executable does not exist
+6. **Lambda executor networking** — understanding that `localhost:4566` inside
+   the LocalStack executor container does not point to LocalStack, and that the
+   environment injected by LocalStack (`AWS_ENDPOINT_URL`) manages this
+   automatically if not overridden
+7. **Portability vs education** — the PowerShell version is more educational
+   (each command is explicitly visible), while Terraform is more suitable
+   for production (declarative, stateful, portable)
 
 ---
 
 ## DynamoDB Persistence & CRUD API
 
-El pipeline original solo encolaba pedidos y los registraba en logs. Se
-anadio una **capa de persistencia** usando DynamoDB y una **API CRUD**
-completa para consultar, actualizar y eliminar los pedidos almacenados.
+The original pipeline only queued orders and logged them. A **persistence layer**
+was added using DynamoDB along with a complete **CRUD API** to query,
+update, and delete stored orders.
 
 ---
 
-### Arquitectura final
+### Final architecture
 
 ```
-Flujo de ingreso (async):
-POST /orders  →  API Gateway  →  Lambda proxy  →  SQS  →  Lambda procesadora
+Ingress flow (async):
+POST /orders  →  API Gateway  →  Lambda proxy  →  SQS  →  Processor Lambda
                                                                 ↓
                                                            DynamoDB (PutItem)
 
-Flujo CRUD (sync):
+CRUD flow (sync):
 GET  /orders          ─┐
-GET  /orders/{id}      ├→  API Gateway  →  Lambda CRUD  →  DynamoDB
+GET  /orders/{id}      ├→  API Gateway  →  CRUD Lambda  →  DynamoDB
 PUT  /orders/{id}     ─┘
 DELETE /orders/{id}   ─┘
 ```
 
-**Dos flujos claramente separados:**
-- **Escritura asincrona:** via SQS, igual que antes, pero ahora la Lambda
-  procesadora persiste en DynamoDB
-- **Lectura/actualizacion/borrado sincrono:** directamente contra DynamoDB
-  via una nueva Lambda CRUD, sin pasar por SQS
+**Two clearly separated flows:**
+- **Async write:** via SQS, just like before, but now the processor
+  Lambda persists to DynamoDB
+- **Synchronous read/update/delete:** directly against DynamoDB
+  via a new CRUD Lambda, without going through SQS
 
 ---
 
-### Archivos nuevos y modificados
+### New and modified files
 
-| Archivo | Estado | Proposito |
+| File | Status | Purpose |
 |---------|--------|-----------|
-| `src/index.py` | Modificado | Ahora escribe en DynamoDB en vez de solo hacer `print()` |
-| `src/orders_crud.py` | Nuevo | Lambda que maneja GET/PUT/DELETE contra DynamoDB |
-| `terraform/dynamodb.tf` | Nuevo | Tabla DynamoDB `pedidos-ecommerce` con clave primaria `id_pedido` (Number) |
-| `terraform/lambda.tf` | Modificado | Anadida la Lambda CRUD + variable de entorno `DYNAMODB_TABLE` en ambas Lambdas |
-| `terraform/iam.tf` | Modificado | Permisos DynamoDB (PutItem, GetItem, UpdateItem, DeleteItem, Scan) |
-| `terraform/api_gateway.tf` | Modificado | Endpoints GET/PUT/DELETE en `/orders` y `/orders/{id}` |
-| `terraform/triggers.tf` | Modificado | Permiso `lambda:InvokeFunction` para la Lambda CRUD |
-| `terraform/outputs.tf` | Modificado | Nuevo output: `dynamodb_table_name`, `crud_lambda_arn` |
+| `src/index.py` | Modified | Now writes to DynamoDB instead of just doing `print()` |
+| `src/orders_crud.py` | New | Lambda that handles GET/PUT/DELETE against DynamoDB |
+| `terraform/dynamodb.tf` | New | DynamoDB table `pedidos-ecommerce` with primary key `id_pedido` (Number) |
+| `terraform/lambda.tf` | Modified | Added CRUD Lambda + `DYNAMODB_TABLE` environment variable on both Lambdas |
+| `terraform/iam.tf` | Modified | DynamoDB permissions (PutItem, GetItem, UpdateItem, DeleteItem, Scan) |
+| `terraform/api_gateway.tf` | Modified | GET/PUT/DELETE endpoints on `/orders` and `/orders/{id}` |
+| `terraform/triggers.tf` | Modified | `lambda:InvokeFunction` permission for the CRUD Lambda |
+| `terraform/outputs.tf` | Modified | New outputs: `dynamodb_table_name`, `crud_lambda_arn` |
 
 ---
 
-### Tabla DynamoDB
+### DynamoDB table
 
 ```hcl
 resource "aws_dynamodb_table" "orders" {
@@ -973,12 +969,12 @@ resource "aws_dynamodb_table" "orders" {
 
   attribute {
     name = "id_pedido"
-    type = "N"                # Number — coincide con el JSON de entrada
+    type = "N"                # Number — matches the JSON input
   }
 }
 ```
 
-**Item almacenado (ejemplo):**
+**Stored item (example):**
 
 ```json
 {
@@ -993,17 +989,17 @@ resource "aws_dynamodb_table" "orders" {
 }
 ```
 
-**Detalles de implementacion:**
-- `billing_mode = "PAY_PER_REQUEST"` — sin necesidad de provisionar capacidad
-- `estado` permite trackear el ciclo de vida del pedido (procesado, completado, etc.)
-- `creado_en` / `actualizado_en` — timestamps ISO 8601 para auditoria
-- `id_pedido` es Number porque el payload de entrada usa valores numericos
+**Implementation details:**
+- `billing_mode = "PAY_PER_REQUEST"` — no need to provision capacity
+- `estado` allows tracking the order lifecycle (processed, completed, etc.)
+- `creado_en` / `actualizado_en` — ISO 8601 timestamps for auditing
+- `id_pedido` is Number because the input payload uses numeric values
 
 ---
 
-### Lambda procesadora (`src/index.py`)
+### Processor Lambda (`src/index.py`)
 
-La Lambda que consume mensajes de SQS ahora escribe en DynamoDB:
+The Lambda that consumes SQS messages now writes to DynamoDB:
 
 ```python
 from decimal import Decimal
@@ -1013,7 +1009,7 @@ pedido = json.loads(body_str, parse_float=Decimal)  # Float → Decimal
 
 item = {
     'id_pedido':      pedido.get('id_pedido'),
-    'cliente':        pedido.get('cliente', 'Anonimo'),
+    'cliente':        pedido.get('cliente', 'Anonymous'),
     'total':          pedido.get('total', Decimal(0)),
     'productos':      pedido.get('productos', []),
     'moneda':         pedido.get('moneda', 'EUR'),
@@ -1025,16 +1021,16 @@ item = {
 table.put_item(Item=item)
 ```
 
-**Punto clave — `parse_float=Decimal`:** boto3 no acepta `float` de Python
-para escribir en DynamoDB. Requiere `Decimal`. Al usar `json.loads()` con
-`parse_float=Decimal`, todos los numeros con decimales del JSON se convierten
-automaticamente al tipo correcto.
+**Key point — `parse_float=Decimal`:** boto3 does not accept Python `float`
+for writing to DynamoDB. It requires `Decimal`. By using `json.loads()` with
+`parse_float=Decimal`, all decimal numbers in the JSON are automatically
+converted to the correct type.
 
 ---
 
-### Lambda CRUD (`src/orders_crud.py`)
+### CRUD Lambda (`src/orders_crud.py`)
 
-Una sola Lambda que recibe todas las peticiones y las rutea internamente:
+A single Lambda that receives all requests and routes them internally:
 
 ```python
 def lambda_handler(event, context):
@@ -1046,50 +1042,50 @@ def lambda_handler(event, context):
     elif method == 'GET' and resource == '/orders/{id}':
         return get_order(event)             # GetItem
     elif method == 'PUT' and resource == '/orders/{id}':
-        return update_order(event)          # UpdateItem con ExpressionAttributeNames
+        return update_order(event)          # UpdateItem with ExpressionAttributeNames
     elif method == 'DELETE' and resource == '/orders/{id}':
         return delete_order(event)          # DeleteItem
     else:
-        return respond(400, {'error': 'Ruta no soportada'})
+        return respond(400, {'error': 'Unsupported route'})
 ```
 
-**Detalles de implementacion:**
-- **`DecimalEncoder`** — serializador JSON personalizado que convierte `Decimal`
-  a `float` para las respuestas (`json.dumps(cls=DecimalEncoder)`)
-- **`ExpressionAttributeNames`** — la Lambda CRUD usa nombres de atributo con
-  prefijo `#` (ej. `#total`, `#estado`) para evitar conflictos con palabras
-  reservadas de DynamoDB (como `total` o `status`)
-- **Campos actualizables:** `cliente`, `total`, `productos`, `moneda`, `estado`
-  — cualquier combinacion enviada en el body del PUT
+**Implementation details:**
+- **`DecimalEncoder`** — custom JSON serializer that converts `Decimal`
+  to `float` for responses (`json.dumps(cls=DecimalEncoder)`)
+- **`ExpressionAttributeNames`** — the CRUD Lambda uses attribute names with
+  `#` prefix (e.g. `#total`, `#estado`) to avoid conflicts with DynamoDB
+  reserved words (like `total` or `status`)
+- **Updatable fields:** `cliente`, `total`, `productos`, `moneda`, `estado`
+  — any combination sent in the PUT body
 
 ---
 
-### Endpoints de la API completa
+### Complete API endpoints
 
-| Metodo | Ruta | Comportamiento | Integracion |
+| Method | Route | Behavior | Integration |
 |--------|------|----------------|-------------|
-| `POST` | `/orders` | Enc cola el pedido en SQS (respuesta inmediata 202) | Lambda proxy (`api_handler.py`) |
-| `GET` | `/orders` | Lista todos los pedidos (Scan DynamoDB) | Lambda CRUD (`orders_crud.py`) |
-| `GET` | `/orders/{id}` | Devuelve un pedido por `id_pedido` | Lambda CRUD |
-| `PUT` | `/orders/{id}` | Actualiza campos del pedido | Lambda CRUD |
-| `DELETE` | `/orders/{id}` | Elimina el pedido | Lambda CRUD |
+| `POST` | `/orders` | Queues the order in SQS (immediate 202 response) | Proxy Lambda (`api_handler.py`) |
+| `GET` | `/orders` | Lists all orders (Scan DynamoDB) | CRUD Lambda (`orders_crud.py`) |
+| `GET` | `/orders/{id}` | Returns an order by `id_pedido` | CRUD Lambda |
+| `PUT` | `/orders/{id}` | Updates order fields | CRUD Lambda |
+| `DELETE` | `/orders/{id}` | Deletes the order | CRUD Lambda |
 
-**Flujo de cada operacion:**
+**Flow of each operation:**
 
 ```
 POST  2001  →  API Gateway  →  Lambda proxy  →  SQS  →  Lambda proc.  →  DynamoDB (write)
-GET   /orders              →  API Gateway  →  Lambda CRUD  →  DynamoDB (Scan)
-GET   /orders/2001         →  API Gateway  →  Lambda CRUD  →  DynamoDB (GetItem)
-PUT   /orders/2001  {body}  →  API Gateway  →  Lambda CRUD  →  DynamoDB (UpdateItem)
-DELETE /orders/2001        →  API Gateway  →  Lambda CRUD  →  DynamoDB (DeleteItem)
+GET   /orders              →  API Gateway  →  CRUD Lambda  →  DynamoDB (Scan)
+GET   /orders/2001         →  API Gateway  →  CRUD Lambda  →  DynamoDB (GetItem)
+PUT   /orders/2001  {body}  →  API Gateway  →  CRUD Lambda  →  DynamoDB (UpdateItem)
+DELETE /orders/2001        →  API Gateway  →  CRUD Lambda  →  DynamoDB (DeleteItem)
 ```
 
 ---
 
-### Pruebas con Postman
+### Testing with Postman
 
-Despues de ejecutar `.\terraform\apply.ps1 -AutoApprove`, la consola muestra
-todos los endpoints disponibles. Ejemplo de salida:
+After running `.\terraform\apply.ps1 -AutoApprove`, the console displays
+all available endpoints. Example output:
 
 ```
 Postman / curl endpoints:
@@ -1113,49 +1109,49 @@ DELETE
 ---------------------------------------------------------
 ```
 
-**Secuencia de prueba completa:**
+**Complete test sequence:**
 
 ```powershell
-# 1. Enviar pedido (async)
+# 1. Send order (async)
 curl.exe -X POST http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders ^
   -H "Content-Type: application/json" ^
   -d "{\"id_pedido\":1001,\"cliente\":\"Test\",\"total\":99.90}"
 
-# 2. Esperar a que la Lambda procesadora lo persista (5-10 segundos)
+# 2. Wait for the processor Lambda to persist it (5-10 seconds)
 
-# 3. Listar todos los pedidos
+# 3. List all orders
 curl.exe http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders
 
-# 4. Leer un pedido especifico
+# 4. Read a specific order
 curl.exe http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1001
 
-# 5. Actualizar el pedido
+# 5. Update the order
 curl.exe -X PUT http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1001 ^
   -H "Content-Type: application/json" ^
   -d "{\"estado\":\"completado\",\"total\":150.00}"
 
-# 6. Eliminar el pedido
+# 6. Delete the order
 curl.exe -X DELETE http://localhost:4566/restapis/<api-id>/dev/_user_request_/orders/1001
 ```
 
 ---
 
-### Conceptos aprendidos con la implementacion CRUD
+### Concepts learned with the CRUD implementation
 
-1. **DynamoDB + boto3** — escritura con `put_item`, lectura con `get_item`,
-   actualizacion con `update_item`, eliminacion con `delete_item`, listado con `scan`
-2. **Decimal vs Float** — DynamoDB no acepta `float` de Python. Uso de
-   `parse_float=Decimal` en `json.loads()` y `DecimalEncoder` personalizado
-   para serializar respuestas JSON
-3. **ExpressionAttributeNames** — palabras reservadas de DynamoDB (como `total`)
-   deben referenciarse con `#nombre` en las UpdateExpression, con su mapping
-   en `ExpressionAttributeNames`
-4. **Single Lambda routing** — una sola Lambda puede manejar multiples
-   operaciones (GET/PUT/DELETE) si se rutea internamente por `httpMethod` y
+1. **DynamoDB + boto3** — writing with `put_item`, reading with `get_item`,
+   updating with `update_item`, deleting with `delete_item`, listing with `scan`
+2. **Decimal vs Float** — DynamoDB does not accept Python `float`. Use of
+   `parse_float=Decimal` in `json.loads()` and custom `DecimalEncoder`
+   for serializing JSON responses
+3. **ExpressionAttributeNames** — DynamoDB reserved words (like `total`)
+   must be referenced with `#name` in the UpdateExpression, with their mapping
+   in `ExpressionAttributeNames`
+4. **Single Lambda routing** — a single Lambda can handle multiple
+   operations (GET/PUT/DELETE) by routing internally based on `httpMethod` and
    `resource`
-5. **API Gateway + {id}** — los parametros de ruta como `/orders/{id}` llegan
-   a la Lambda via `event['pathParameters']['id']`
-6. **API Gateway deployment triggers** — al anadir nuevos endpoints, Terraform
-   necesita un trigger hash que detecte cambios y fuerce un nuevo deployment
-7. **IAM permissions granulares** — la politica de la Lambda CRUD necesita
-   permisos especificos para cada operacion DynamoDB
+5. **API Gateway + {id}** — path parameters like `/orders/{id}` reach
+   the Lambda via `event['pathParameters']['id']`
+6. **API Gateway deployment triggers** — when adding new endpoints, Terraform
+   needs a hash trigger that detects changes and forces a new deployment
+7. **Granular IAM permissions** — the CRUD Lambda policy needs
+   specific permissions for each DynamoDB operation
